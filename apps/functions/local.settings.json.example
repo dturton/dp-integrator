@@ -1,0 +1,27 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "FUNCTIONS_NODE_VERSION": "~20",
+    "WEBSITE_NODE_DEFAULT_VERSION": "~20",
+
+    "DPI_ENVIRONMENT": "dev",
+
+    "// KEY_VAULT_URI": "https://kvdpi<env><suffix>.vault.azure.net/ (required — Shopify webhook shared secrets + NS TBA creds)",
+    "KEY_VAULT_URI": "",
+
+    "// SERVICE_BUS_NAMESPACE": "fully qualified, e.g. dpi-sb-dev-<suffix>.servicebus.windows.net (required)",
+    "SERVICE_BUS_NAMESPACE": "",
+    "SERVICE_BUS_TOPIC": "orders-in",
+
+    "// BLOB_ACCOUNT_URL": "https://<storageAccount>.blob.core.windows.net (required — raw webhook envelope persistence)",
+    "BLOB_ACCOUNT_URL": "",
+    "INBOUND_BLOB_CONTAINER": "inbound-webhooks",
+
+    "// DPI_CONNECTIONS_JSON": "JSON array of Connection objects. See config/connections.example.jsonc for the schema.",
+    "DPI_CONNECTIONS_JSON": "[]",
+
+    "APPLICATIONINSIGHTS_CONNECTION_STRING": ""
+  }
+}

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.azure/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+local.settings.json
+.DS_Store
+coverage/
+.turbo/
+.vscode/*.log
+.vitest-temp/
+*.log
+.bicep-build/

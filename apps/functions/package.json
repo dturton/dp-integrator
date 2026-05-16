@@ -1,0 +1,22 @@
+{
+  "name": "@dpi/functions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.1",
+    "@azure/identity": "^4.4.1",
+    "@azure/keyvault-secrets": "^4.8.0",
+    "@azure/service-bus": "^7.9.5",
+    "@azure/storage-blob": "^12.24.0",
+    "@dpi/core": "workspace:*",
+    "@dpi/shopify-client": "workspace:*",
+    "@dpi/netsuite-client": "workspace:*",
+    "@dpi/mapping-engine": "workspace:*"
+  }
+}

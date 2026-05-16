@@ -1,0 +1,139 @@
+name: Deploy
+
+# Manual deploy of infra + function app to a target environment.
+# Pre-reqs (one-time setup; see README "Deploying" section):
+#   - Azure Entra app registration with federated credential for this repo+env
+#   - GH Environment per target (dev, sandbox) with secrets:
+#       AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#       SQL_ADMIN_PASSWORD, KEY_VAULT_ADMIN_PRINCIPAL_ID
+#       DPI_CONNECTIONS_JSON  (the connection registry — JSON array, NO raw secrets)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        type: choice
+        options: [dev, sandbox]
+        default: dev
+        required: true
+      deploy_infra:
+        description: 'Deploy Bicep infra (uncheck for app-code-only redeploy)'
+        type: boolean
+        default: true
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  # Serialize deploys per environment so two runs don't fight over the same resources.
+  group: deploy-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install + build + test
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm test
+          pnpm build
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Bicep infra
+        if: ${{ github.event.inputs.deploy_infra == 'true' }}
+        id: bicep
+        env:
+          SQL_ADMIN_PASSWORD: ${{ secrets.SQL_ADMIN_PASSWORD }}
+          KV_ADMIN_PRINCIPAL_ID: ${{ secrets.KEY_VAULT_ADMIN_PRINCIPAL_ID }}
+          DPI_CONNECTIONS_JSON: ${{ secrets.DPI_CONNECTIONS_JSON }}
+        run: |
+          set -euo pipefail
+          DEPLOYMENT_NAME="dpi-${{ github.event.inputs.environment }}-$(date -u +%Y%m%d%H%M%S)"
+          OUTPUTS=$(az deployment sub create \
+            --name "$DEPLOYMENT_NAME" \
+            --location eastus2 \
+            --template-file infra/main.bicep \
+            --parameters "infra/parameters/${{ github.event.inputs.environment }}.bicepparam" \
+            --parameters sqlAdminPassword="$SQL_ADMIN_PASSWORD" \
+            --parameters keyVaultAdminPrincipalId="$KV_ADMIN_PRINCIPAL_ID" \
+            --parameters connectionsJson="$DPI_CONNECTIONS_JSON" \
+            --query properties.outputs \
+            -o json)
+          FUNCTION_APP=$(echo "$OUTPUTS" | jq -r '.functionAppName.value')
+          WEBHOOK_URL=$(echo "$OUTPUTS" | jq -r '.webhookUrl.value')
+          echo "deployment_name=$DEPLOYMENT_NAME" >> "$GITHUB_OUTPUT"
+          echo "function_app=$FUNCTION_APP"     >> "$GITHUB_OUTPUT"
+          echo "webhook_url=$WEBHOOK_URL"       >> "$GITHUB_OUTPUT"
+          echo "::notice::Function App → $FUNCTION_APP"
+          echo "::notice::Webhook URL  → $WEBHOOK_URL"
+
+      - name: Resolve function app name (no infra deploy)
+        if: ${{ github.event.inputs.deploy_infra != 'true' }}
+        id: lookup
+        run: |
+          set -euo pipefail
+          RG="rg-dpi-${{ github.event.inputs.environment }}"
+          FUNCTION_APP=$(az functionapp list --resource-group "$RG" --query '[0].name' -o tsv)
+          if [ -z "$FUNCTION_APP" ]; then
+            echo "::error::No Function App found in resource group $RG"
+            exit 1
+          fi
+          echo "function_app=$FUNCTION_APP" >> "$GITHUB_OUTPUT"
+
+      - name: Package Function App
+        env:
+          # Set after either bicep deploy or lookup step ran.
+          FUNCTION_APP: ${{ steps.bicep.outputs.function_app || steps.lookup.outputs.function_app }}
+        run: |
+          set -euo pipefail
+          rm -rf _pkg
+          # pnpm deploy produces a self-contained app dir: package.json with workspace
+          # deps inlined into node_modules/, plus the package source. Functions runtime
+          # entry-points off package.json `main` (= dist/index.js).
+          pnpm --filter @dpi/functions deploy --prod _pkg
+          cp apps/functions/host.json _pkg/host.json
+          (cd _pkg && zip -rq ../app-package.zip . -x "*.map" "src/*" "tsconfig*.json" "*.tsbuildinfo")
+          ls -lh app-package.zip
+          echo "Targeting Function App: $FUNCTION_APP"
+
+      - name: Deploy Function App package
+        uses: azure/functions-action@v1
+        with:
+          app-name: ${{ steps.bicep.outputs.function_app || steps.lookup.outputs.function_app }}
+          package: app-package.zip
+          sku: flexconsumption
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deploy complete"
+            echo ""
+            echo "- Environment: \`${{ github.event.inputs.environment }}\`"
+            echo "- Function App: \`${{ steps.bicep.outputs.function_app || steps.lookup.outputs.function_app }}\`"
+            if [ -n "${{ steps.bicep.outputs.webhook_url || '' }}" ]; then
+              echo "- Webhook URL: ${{ steps.bicep.outputs.webhook_url }}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

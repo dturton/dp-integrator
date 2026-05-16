@@ -1,0 +1,61 @@
+// Example field-map for Shopify order → NS Sales Order/Cash Sale.
+// Real field maps live alongside the connection; this is M1 territory and
+// shipped here as a SHAPE reference only.
+//
+// Primitive shapes are typed in `packages/mapping-engine/src/primitives.ts`.
+{
+  "mapVersion": "v1",
+  "connectionId": "acme-us",
+  "target": "salesOrder",
+  "header": [
+    {
+      "kind": "constant",
+      "value": "1",
+      "to": "subsidiary"
+    },
+    {
+      "kind": "lookup",
+      "table": "lookup_location",
+      "fromKey": "locationId",
+      "to": "location",
+      "required": false
+    },
+    {
+      "kind": "direct",
+      "from": "name",
+      "to": "tranId"
+    },
+    {
+      "kind": "direct",
+      "from": "id",
+      "to": "externalId"
+    },
+    {
+      "kind": "derive",
+      "fn": "parseShopifyDate",
+      "args": { "field": "processedAt" },
+      "to": "tranDate"
+    }
+  ],
+  "lines": [
+    // Line builders are derived in M1; this is illustrative.
+    {
+      "kind": "derive",
+      "fn": "shopifyLineToItemLine",
+      "to": "items"
+    }
+  ],
+  "tax": {
+    // Selected at runtime via TaxStrategy (suitetax | legacy) on the connection.
+    "engineConfig": {
+      "suitetax": { "useTaxDetailsList": true },
+      "legacy":   { "fallbackTaxCode": "AVATAX" }
+    }
+  },
+  "balancing": {
+    // Tolerance for the rounding/balancing line; brief invariant: totals must
+    // reconcile within this. Real impl lands in M1.
+    "tolerance": { "amount": "0.05", "currencyCode": "USD" },
+    "balancingItemId": "BALANCING"
+  }
+}
