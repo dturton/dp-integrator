@@ -2,10 +2,13 @@ using '../main.bicep'
 
 param environmentName = 'dev'
 param location = 'eastus2'
-// SQL provisioning is disabled in eastus2 for this subscription
-// (ProvisioningDisabled / Conflict on Microsoft.Sql/servers create); use eastus
-// for the SQL server only. Other resources stay in eastus2 to preserve the
-// already-deployed Key Vault / Service Bus / Log Analytics / App Insights.
+// SQL provisioning is currently restricted in both eastus2 AND eastus for this
+// subscription (ProvisioningDisabled on Microsoft.Sql/servers create). Slice A
+// (webhook receiver) does not need SQL, so deploySql=false unblocks the deploy.
+// Slice B will need SQL — by then, either open a Microsoft support ticket to
+// raise the SQL quota for the chosen region, or switch the data layer to
+// Postgres Flexible Server (fewer regional quota restrictions on PAYG subs).
+param deploySql = false
 param sqlLocation = 'eastus'
 param resourceGroupName = 'rg-dpi-dev'
 param namePrefix = 'dpi'

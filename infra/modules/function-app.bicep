@@ -7,8 +7,10 @@ param tags object
 param appInsightsConnectionString string
 param keyVaultUri string
 param serviceBusNamespace string
-param sqlServerFqdn string
-param sqlDatabaseName string
+@description('Optional — empty string when SQL is not deployed yet (Slice A).')
+param sqlServerFqdn string = ''
+@description('Optional — empty string when SQL is not deployed yet (Slice A).')
+param sqlDatabaseName string = ''
 
 @description('JSON array of connections (string) to bootstrap the receiver. Default empty array; operator seeds via az CLI or pipeline.')
 param connectionsJson string = '[]'

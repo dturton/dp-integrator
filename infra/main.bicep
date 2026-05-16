@@ -44,6 +44,9 @@ param keyVaultAdminPrincipalId string = ''
 @description('JSON-stringified array of connection records to seed the receiver with. Defaults to an empty array; operator seeds via az CLI / pipeline secret. NEVER include raw secrets — connections carry KV refs.')
 param connectionsJson string = '[]'
 
+@description('Deploy Azure SQL server + database. Slice A (webhook receiver) does NOT require SQL — set this to false when SQL provisioning is restricted in the available regions for the subscription (ProvisioningDisabled). Slice B will require it (re-enable then, after either a support-ticket quota grant or a migration to Postgres Flexible Server).')
+param deploySql bool = true
+
 var commonTags = {
   workload: 'dp-integrator'
   env: environmentName
@@ -79,7 +82,7 @@ module keyVault './modules/key-vault.bicep' = {
   }
 }
 
-module sql './modules/sql.bicep' = {
+module sql './modules/sql.bicep' = if (deploySql) {
   scope: rg
   name: 'sql'
   params: {
@@ -114,8 +117,8 @@ module functionApp './modules/function-app.bicep' = {
     appInsightsConnectionString: appInsights.outputs.connectionString
     keyVaultUri: keyVault.outputs.vaultUri
     serviceBusNamespace: serviceBus.outputs.namespaceName
-    sqlServerFqdn: sql.outputs.serverFqdn
-    sqlDatabaseName: sql.outputs.databaseName
+    sqlServerFqdn: deploySql ? sql.outputs.serverFqdn : ''
+    sqlDatabaseName: deploySql ? sql.outputs.databaseName : ''
     connectionsJson: connectionsJson
   }
 }
@@ -135,8 +138,8 @@ output functionAppPrincipalId string = functionApp.outputs.principalId
 output keyVaultUri string = keyVault.outputs.vaultUri
 output keyVaultName string = keyVault.outputs.vaultName
 output serviceBusNamespace string = serviceBus.outputs.namespaceName
-output sqlServerFqdn string = sql.outputs.serverFqdn
-output sqlDatabaseName string = sql.outputs.databaseName
+output sqlServerFqdn string = deploySql ? sql.outputs.serverFqdn : ''
+output sqlDatabaseName string = deploySql ? sql.outputs.databaseName : ''
 output appInsightsConnectionString string = appInsights.outputs.connectionString
 output storageAccountName string = functionApp.outputs.storageAccountName
 output storageBlobEndpoint string = functionApp.outputs.storageBlobEndpoint
