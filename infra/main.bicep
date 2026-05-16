@@ -21,6 +21,9 @@ param environmentName string
 @description('Azure region for all resources.')
 param location string = 'eastus2'
 
+@description('Override region for Azure SQL only. Some subscriptions have SQL provisioning disabled in specific regions (returns ProvisioningDisabled / Conflict) and a different region is the only fix without a quota support ticket. Defaults to `location`.')
+param sqlLocation string = location
+
 @description('Resource group to create (or update) for this environment.')
 param resourceGroupName string = 'rg-dpi-${environmentName}'
 
@@ -82,7 +85,7 @@ module sql './modules/sql.bicep' = {
   params: {
     namePrefix: namePrefix
     environmentName: environmentName
-    location: location
+    location: sqlLocation
     tags: commonTags
     sqlAdminLogin: sqlAdminLogin
     sqlAdminPassword: sqlAdminPassword
