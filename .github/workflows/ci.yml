@@ -10,6 +10,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Opt every JS-based action into Node 24. GitHub forces this on 2026-06-02 and
+# removes Node 20 from runners on 2026-09-16; explicit opt-in silences the
+# deprecation warning and proves the workflow runs cleanly under Node 24.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
