@@ -8,7 +8,12 @@ param sqlAdminLogin string
 @secure()
 param sqlAdminPassword string
 
-var serverName = toLower('${namePrefix}-sql-${environmentName}-${uniqueString(resourceGroup().id)}')
+// The 'sql-v2' salt mixed into uniqueString shifts the generated suffix off the
+// name that a prior failed deploy registered in eastus2 (provider rejects
+// re-create in a different region with InvalidResourceLocation even when the
+// underlying resource was never fully provisioned). Bump the salt if the
+// same situation ever recurs.
+var serverName = toLower('${namePrefix}-sql-${environmentName}-${uniqueString(resourceGroup().id, 'sql-v2')}')
 var databaseName = '${namePrefix}-db-${environmentName}'
 
 resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
