@@ -113,12 +113,17 @@ jobs:
         env:
           # Set after either bicep deploy or lookup step ran.
           FUNCTION_APP: ${{ steps.bicep.outputs.function_app || steps.lookup.outputs.function_app }}
+          # Force `pnpm deploy` to produce a HOISTED node_modules (flat layout) so
+          # transitive Azure SDK deps (e.g. @azure/keyvault-common, pulled in by
+          # @azure/keyvault-secrets) are resolvable from the top of node_modules at
+          # runtime. The workspace default is `isolated` (symlinks into .pnpm/), which
+          # zip flattens into orphaned copies that can't find their siblings — the
+          # Functions host then logs ERR_MODULE_NOT_FOUND and "0 functions found".
+          # Setting this only on the deploy step keeps the dev install symlinked.
+          npm_config_node_linker: hoisted
         run: |
           set -euo pipefail
           rm -rf _pkg
-          # pnpm deploy produces a self-contained app dir: package.json with workspace
-          # deps inlined into node_modules/, plus the package source. Functions runtime
-          # entry-points off package.json `main` (= dist/index.js).
           pnpm --filter @dpi/functions deploy --prod _pkg
           cp apps/functions/host.json _pkg/host.json
           (cd _pkg && zip -rq ../app-package.zip . -x "*.map" "src/*" "tsconfig*.json" "*.tsbuildinfo")
