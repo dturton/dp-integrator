@@ -9,6 +9,18 @@ import type { NetSuiteGateway, UpsertResult } from './gateway.js';
  *
  * The factory is the ONLY place that imports `NetSuiteClient`; everything
  * downstream sees `NetSuiteGateway`.
+ *
+ * Internal-id extraction: NS REST returns 204 No Content on both successful
+ * create and update via the `eid:` (external-id) upsert path. The created or
+ * updated record's internal id lives in the `Location` response header:
+ *   Location: https://<acct>.suitetalk.api.netsuite.com/services/rest/record/v1/<recordType>/<internalId>
+ * We parse the last URL segment. Some older NS API versions return 200/201
+ * with `{ id }` in the body — handled as a fallback.
+ *
+ * `created` vs updated: NS doesn't reliably distinguish via status (both 204).
+ * We set `created` from the body's HTTP status (201 only) for now; in the
+ * common 204 case it'll be `false` either way. The caller should treat this
+ * as a hint, not a guarantee.
  */
 export class SdkNetSuiteGateway implements NetSuiteGateway {
   /**
@@ -34,18 +46,23 @@ export class SdkNetSuiteGateway implements NetSuiteGateway {
   }): Promise<UpsertResult> {
     const account = this.resolveAccount(args.nsAccountId);
     const client = await this.factory.get(account);
-    const response = await client.records.upsert(
+    const response = (await client.records.upsert(
       args.recordType,
       'externalId',
       args.externalId,
       args.payload,
-    );
-    const data = response.data as { id?: string | number };
-    const internalId = data.id !== undefined ? String(data.id) : '';
+    )) as { status: number; headers?: Record<string, string>; body?: unknown };
+
+    const internalId = extractInternalId(response);
+    if (!internalId) {
+      const loc = response.headers?.['location'] ?? response.headers?.['Location'] ?? '';
+      throw new Error(
+        `SdkNetSuiteGateway.upsertByExternalId: NS returned status=${response.status} but no internal id (Location='${loc}')`,
+      );
+    }
     return {
       internalId,
       externalId: args.externalId,
-      // 201 → created; 200 → updated.
       created: response.status === 201,
     };
   }
@@ -69,4 +86,21 @@ export class SdkNetSuiteGateway implements NetSuiteGateway {
 
     return client.suiteql.queryOne<Record<string, unknown>>(sql);
   }
+}
+
+function extractInternalId(response: {
+  body?: unknown;
+  headers?: Record<string, string>;
+}): string | undefined {
+  // Older NS / non-upsert paths put the id in the body.
+  if (response.body && typeof response.body === 'object') {
+    const id = (response.body as { id?: string | number }).id;
+    if (id !== undefined && id !== null) return String(id);
+  }
+  const location = response.headers?.['location'] ?? response.headers?.['Location'];
+  if (typeof location === 'string' && location.length > 0) {
+    const last = location.split('/').pop();
+    if (last && last.length > 0) return last;
+  }
+  return undefined;
 }

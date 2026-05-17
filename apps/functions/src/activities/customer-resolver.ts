@@ -86,5 +86,10 @@ function buildCustomerPayload(
     payload['companyname'] = companyName;
   }
   if (c.email) payload['email'] = c.email;
+  // Some NS accounts (and our dev sandbox) require Phone on customer create.
+  // Shopify keeps the phone on the default address rather than the customer
+  // record itself; fall through to it when present.
+  const phone = c.defaultAddress?.phone;
+  if (phone) payload['phone'] = phone;
   return payload;
 }
