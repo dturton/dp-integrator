@@ -65,7 +65,7 @@ export class SdkNetSuiteGateway implements NetSuiteGateway {
     const response = await transportOf(client)
       .request(url, { method: 'PUT', body })
       .catch((err) => {
-        throw decorateNsError(err, `upsert ${args.recordType} eid:${nsExternalId}`);
+        throw decorateNsError(err, `upsert ${args.recordType} eid:${nsExternalId}`, body);
       });
 
     const internalId = extractInternalId(response);
@@ -128,12 +128,16 @@ function transportOf(client: unknown): SdkTransport {
  * the original error attached via `cause` so downstream callers can still
  * introspect it.
  */
-function decorateNsError(err: unknown, context: string): Error {
+function decorateNsError(err: unknown, context: string, requestBody?: unknown): Error {
   const e = err as { name?: string; status?: number; message?: string; details?: unknown };
   if (e?.name !== 'NetSuiteError') return err as Error;
   const detailsStr =
     e.details !== undefined ? ` details=${JSON.stringify(e.details).slice(0, 1500)}` : '';
-  const wrapped = new Error(`NS ${context} status=${e.status} ${e.message ?? ''}${detailsStr}`);
+  const bodyStr =
+    requestBody !== undefined ? ` body=${JSON.stringify(requestBody).slice(0, 4000)}` : '';
+  const wrapped = new Error(
+    `NS ${context} status=${e.status} ${e.message ?? ''}${detailsStr}${bodyStr}`,
+  );
   (wrapped as { cause?: unknown }).cause = err;
   return wrapped;
 }
