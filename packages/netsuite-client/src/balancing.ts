@@ -47,6 +47,7 @@ export interface BalancingDiagnostics {
   readonly nsLinesTotal: number;
   readonly nsTaxTotal: number;
   readonly nsShippingTotal: number;
+  readonly orderDiscounts: number;
   readonly diff: number;
   readonly applied: boolean;
 }
@@ -67,7 +68,14 @@ export function applyBalancing(
     (payload.shipping ?? []).map((line) => line['amount']),
   );
   const nsLinesTotal = sumAmounts(payload.item.map((line) => line['amount']));
-  const nsTotal = round2(nsLinesTotal + nsShippingTotal + nsTaxTotal);
+  // Shopify's `totalDiscounts` reflects ORDER-LEVEL discounts that aren't
+  // already reflected in each line's `discountedTotal` (line-level discounts
+  // are baked into discountedTotal by Shopify). Subtract here so the
+  // computed NS total matches what Shopify ultimately charged. A future
+  // refinement adds an explicit NS discount line so the discount info is
+  // preserved in NS (rather than being absorbed by the balancing line).
+  const orderDiscounts = parseAmount(order.totalDiscounts.amount);
+  const nsTotal = round2(nsLinesTotal + nsShippingTotal + nsTaxTotal - orderDiscounts);
   const diff = round2(shopifyTotal - nsTotal);
 
   if (Math.abs(diff) > options.toleranceAmount) {
@@ -80,6 +88,7 @@ export function applyBalancing(
         nsLinesTotal,
         nsShippingTotal,
         nsTaxTotal,
+        orderDiscounts,
         diff,
       },
     });
@@ -90,6 +99,7 @@ export function applyBalancing(
     nsLinesTotal,
     nsTaxTotal,
     nsShippingTotal,
+    orderDiscounts,
     diff,
     applied: diff !== 0,
   };

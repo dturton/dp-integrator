@@ -88,6 +88,46 @@ describe('applyBalancing', () => {
     expect(bal['amount']).toBe('1.00');
   });
 
+  it('subtracts order-level discounts from the NS expected total', () => {
+    // Real-world shape: Shopify charged $265.05 on a $279 line with a
+    // $13.95 order-level discount applied at checkout (not baked into the
+    // line's discountedTotal).
+    const order = makeFakeOrder({
+      lineItems: [
+        {
+          id: 'gid://shopify/LineItem/L1',
+          title: 'Repair Kit',
+          sku: 'RKGT15',
+          quantity: 1,
+          originalUnitPrice: { amount: '279.00', currencyCode: 'USD' },
+          discountedTotal: { amount: '279.00', currencyCode: 'USD' }, // line discount = 0
+          discountAllocations: [],
+        },
+      ],
+      shippingLines: [],
+      totalShippingPrice: { amount: '0.00', currencyCode: 'USD' },
+      taxLines: [],
+      totalTax: { amount: '0.00', currencyCode: 'USD' },
+      totalDiscounts: { amount: '13.95', currencyCode: 'USD' },
+      totalPrice: { amount: '265.05', currencyCode: 'USD' },
+    });
+    const payload = basePayload({
+      item: [{ item: 'RKGT15', quantity: 1, rate: '279.00', amount: '279.00', description: 'Repair Kit', externalid: 'L1' }],
+      shipping: undefined,
+    });
+    const r = applyBalancing(payload, order);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload.diagnostics).toMatchObject({
+      shopifyTotal: 265.05,
+      nsLinesTotal: 279,
+      orderDiscounts: 13.95,
+      diff: 0,
+      applied: false,
+    });
+    expect(r.payload.payload.item).toHaveLength(1); // no balancing line — totals match exactly after discount
+  });
+
   it('handles tax-only orders (no shipping)', () => {
     const order = makeFakeOrder({
       shippingLines: [],
