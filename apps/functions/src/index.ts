@@ -11,10 +11,25 @@
  */
 import { getAppContext } from './bootstrap.js';
 import { PostgresLookupResolver } from './adapters/index.js';
+import { registerNsDiagnostic } from './triggers/ns-diagnostic.js';
 import { registerOrderImportHandler } from './triggers/order-import-handler.js';
 import { registerShopifyWebhook } from './triggers/shopify-webhook.js';
 
 registerShopifyWebhook(() => getAppContext());
+
+// Diagnostic-only trigger (dev). Hit GET /api/ns-diagnostic to probe NS
+// reads + writes from the function-host network path. Remove once NS writes
+// stabilize.
+registerNsDiagnostic(() => {
+  const ctx = getAppContext();
+  // Pick the first non-'pending' connection's NS account for the probe.
+  // Synchronous lookup OK because connections are seeded at boot.
+  return {
+    ns: ctx.ns,
+    nsAccountId: '11541804_SB1',
+    nsSubsidiary: '1',
+  };
+});
 
 // Slice D5: full pipeline. The handler claims xref, re-fetches the order,
 // runs eligibility, resolves customer, builds the NS payload via the mapping
