@@ -196,6 +196,30 @@ The verb refuses by default if the xref is `synced` (no double-import — see
 brief invariant 1). It deletes the row and publishes for `pending` / `error` /
 `ignored`; if no row exists it just publishes.
 
+### Dead-letter quarantine
+
+Service Bus moves a message to the subscription DLQ after
+`maxDeliveryCount: 10` ([service-bus.bicep:42](infra/modules/service-bus.bicep:42)).
+Slice M2-B adds a listener (`shopifyOrderDlqHandler`) on the
+`order-import/$DeadLetterQueue` path that records one `error_records` row per
+dead-lettered envelope, status `quarantined`, with the original webhook
+envelope preserved for forensics / future replay.
+
+For now there's no `dpi` verb for browsing them — query the table directly
+(any operator with the dpi PG env vars set):
+
+```sql
+SELECT id, connection_id, dedup_key, status, message, created_at
+  FROM error_records
+ WHERE environment = 'dev' AND status = 'quarantined'
+ ORDER BY created_at DESC
+ LIMIT 20;
+```
+
+To replay a quarantined order after fixing root cause, extract the orderGid
+from `dedup_key` and run `dpi replay <gid> --connection <id>` (the existing
+M2-A verb).
+
 A REST equivalent is mounted at `POST /api/ops/replay` (function-key auth)
 for ops who don't want to install the CLI:
 

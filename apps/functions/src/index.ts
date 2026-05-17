@@ -13,6 +13,7 @@ import { getAppContext } from './bootstrap.js';
 import { PostgresLookupResolver } from './adapters/index.js';
 import { registerAdminReplay } from './triggers/admin-replay.js';
 import { registerNsDiagnostic } from './triggers/ns-diagnostic.js';
+import { registerOrderDlqHandler } from './triggers/order-dlq-handler.js';
 import { registerOrderImportHandler } from './triggers/order-import-handler.js';
 import { registerShopifyWebhook } from './triggers/shopify-webhook.js';
 
@@ -68,5 +69,17 @@ registerAdminReplay(() => {
     connections: ctx.connections,
     xrefStore: ctx.xrefStore,
     queue: ctx.orderQueue,
+  };
+});
+
+// M2-B: DLQ → quarantine. Listens to orders-in/order-import/$DeadLetterQueue
+// and writes one error_records row per dead-lettered envelope so a message
+// that exhausts maxDeliveryCount becomes visible to ops rather than vanishing.
+registerOrderDlqHandler(() => {
+  const ctx = getAppContext();
+  return {
+    environment: ctx.environment,
+    connections: ctx.connections,
+    errorStore: ctx.errorStore,
   };
 });

@@ -7,6 +7,7 @@ import {
   type Connection,
   type ConnectionsRepo,
   type Environment,
+  type ErrorStore,
   type GovernorConfig,
   type QueueProducer,
   type SecretProvider,
@@ -23,6 +24,7 @@ import { ShopifyHttpGateway, type ShopifyGateway } from '@dpi/shopify-client';
 import {
   BlobEnvelopeStore,
   KeyVaultSecretProvider,
+  PostgresErrorStore,
   PostgresXrefStore,
   ServiceBusQueueProducer,
   buildPgPool,
@@ -53,6 +55,8 @@ export interface AppContext {
   /** Slice B+. May be undefined when Postgres isn't deployed. */
   readonly pgPool?: pg.Pool;
   readonly xrefStore?: XrefStore;
+  /** Slice M2-B. Same lifecycle as xrefStore — both rely on pgPool. */
+  readonly errorStore?: ErrorStore;
 }
 
 let cached: AppContext | undefined;
@@ -99,9 +103,11 @@ function buildAppContext(): AppContext {
   const pgUser = process.env['POSTGRES_MI_USER'] ?? process.env['WEBSITE_SITE_NAME'];
   let pgPool: pg.Pool | undefined;
   let xrefStore: XrefStore | undefined;
+  let errorStore: ErrorStore | undefined;
   if (pgHost && pgDatabase && pgUser) {
     pgPool = buildPgPool({ host: pgHost, database: pgDatabase, user: pgUser });
     xrefStore = new PostgresXrefStore(pgPool);
+    errorStore = new PostgresErrorStore(pgPool);
   }
 
   return {
@@ -121,6 +127,7 @@ function buildAppContext(): AppContext {
     guestCustomerInternalId,
     ...(pgPool ? { pgPool } : {}),
     ...(xrefStore ? { xrefStore } : {}),
+    ...(errorStore ? { errorStore } : {}),
   };
 }
 
