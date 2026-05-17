@@ -15,9 +15,9 @@ import { registerShopifyWebhook } from './triggers/shopify-webhook.js';
 
 registerShopifyWebhook(() => getAppContext());
 
-// Slice B+: drain the Service Bus topic into the order handler. The handler
-// refuses to run if the bootstrap didn't supply an xrefStore (Postgres not
-// configured), so trigger registration is conditional on context shape.
+// Slice B+: drain the Service Bus topic into the order handler.
+// Slice C adds shopify gateway + ns gateway + guestCustomerInternalId so the
+// handler can re-fetch, eligibility-check, and resolve customers.
 registerOrderImportHandler(() => {
   const ctx = getAppContext();
   if (!ctx.xrefStore) {
@@ -29,5 +29,8 @@ registerOrderImportHandler(() => {
     environment: ctx.environment,
     connections: ctx.connections,
     xrefStore: ctx.xrefStore,
+    shopify: ctx.shopify,
+    ns: ctx.ns,
+    guestCustomerInternalId: ctx.guestCustomerInternalId,
   };
 });
