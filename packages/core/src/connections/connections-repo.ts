@@ -152,6 +152,12 @@ function coerceConnection(value: unknown, idx: number): Connection {
     extraOrderHeaderMappings = extrasRaw;
   }
 
+  const defaultShipItemIdRaw = v['defaultShipItemId'];
+  const defaultShipItemId =
+    defaultShipItemIdRaw === undefined || defaultShipItemIdRaw === null
+      ? undefined
+      : String(defaultShipItemIdRaw);
+
   const conn: Connection = {
     connectionId: required('connectionId'),
     environment: env,
@@ -167,6 +173,7 @@ function coerceConnection(value: unknown, idx: number): Connection {
     mapVersion: required('mapVersion'),
     enabled,
     ...(extraOrderHeaderMappings !== undefined ? { extraOrderHeaderMappings } : {}),
+    ...(defaultShipItemId !== undefined ? { defaultShipItemId } : {}),
   };
   return conn;
 }

@@ -63,6 +63,16 @@ export interface Connection {
    * mapping evaluator throws clearly on malformed entries.
    */
   readonly extraOrderHeaderMappings?: readonly unknown[];
+  /**
+   * NS internal id of the shipping item to use for every Shopify shipping
+   * line on this connection. Set when the store's shipping methods aren't
+   * registered as named NS items matching the Shopify title — without this,
+   * the item resolver parks every order with a shipping line.
+   *
+   * Future M2: replace with a `lookup_ship_method` table mapping each
+   * Shopify shipping title to its own NS internal id (multi-rate stores).
+   */
+  readonly defaultShipItemId?: string;
 }
 
 /** A Shopify webhook envelope as we receive it (minimal subset core needs). */

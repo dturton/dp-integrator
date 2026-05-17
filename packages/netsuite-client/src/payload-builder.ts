@@ -71,7 +71,7 @@ export async function buildOrderPayload(
     });
   }
 
-  const shippingResult = await evaluate(args.order, [buildDefaultShippingMap()], ctx);
+  const shippingResult = await evaluate(args.order, [buildDefaultShippingMap(args.connection)], ctx);
   if (!shippingResult.ok) return shippingResult;
   const shippingLines = shippingResult.payload['shipping'];
 

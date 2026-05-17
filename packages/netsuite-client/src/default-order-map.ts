@@ -71,11 +71,15 @@ export function buildDefaultLineItemsMap(): Mapping {
   };
 }
 
-export function buildDefaultShippingMap(): Mapping {
+export function buildDefaultShippingMap(connection: Connection): Mapping {
+  const args: Record<string, unknown> = {};
+  if (connection.defaultShipItemId !== undefined && connection.defaultShipItemId.length > 0) {
+    args['defaultShipItemId'] = connection.defaultShipItemId;
+  }
   return {
     kind: 'derive',
     fn: 'shopifyShippingToLine',
-    args: {},
+    args,
     to: 'shipping',
   };
 }
