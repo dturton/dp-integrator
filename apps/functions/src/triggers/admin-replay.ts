@@ -16,7 +16,11 @@ import {
 /**
  * REST admin: trigger a replay of a single order through the import pipeline.
  *
- * POST /api/admin/replay
+ * POST /api/ops/replay
+ *
+ * (Originally lived at /api/admin/replay but the Functions host reserves
+ * /api/admin/* for its own admin API — that route silently 404s any user
+ * trigger. /api/ops/ is the safe replacement.)
  * Body:
  *   {
  *     "connectionId": "dev-store-1",
@@ -146,7 +150,7 @@ export function registerAdminReplay(getDeps: () => ReplayDeps): void {
   app.http('adminReplay', {
     methods: ['POST'],
     authLevel: 'function',
-    route: 'admin/replay',
+    route: 'ops/replay',
     handler: async (
       request: HttpRequest,
       context: InvocationContext,

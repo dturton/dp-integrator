@@ -196,12 +196,12 @@ The verb refuses by default if the xref is `synced` (no double-import — see
 brief invariant 1). It deletes the row and publishes for `pending` / `error` /
 `ignored`; if no row exists it just publishes.
 
-A REST equivalent is mounted at `POST /api/admin/replay` (function-key auth)
+A REST equivalent is mounted at `POST /api/ops/replay` (function-key auth)
 for ops who don't want to install the CLI:
 
 ```bash
 KEY=$(az functionapp keys list --name <funcapp> -g <rg> --query functionKeys.default -o tsv)
-curl -sS -X POST "https://<funcapp>.azurewebsites.net/api/admin/replay?code=$KEY" \
+curl -sS -X POST "https://<funcapp>.azurewebsites.net/api/ops/replay?code=$KEY" \
   -H 'Content-Type: application/json' \
   -d '{"connectionId":"dev-store-1","orderGid":"6828043305123","force":false}'
 ```
