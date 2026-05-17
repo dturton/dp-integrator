@@ -12,6 +12,7 @@ export type { NetSuiteGateway, UpsertResult } from './gateway.js';
 export { SdkNetSuiteGateway } from './sdk-gateway.js';
 export { FakeNetSuiteGateway } from './fake-gateway.js';
 export {
+  applyTaxPayloadHeader,
   LegacyTaxStrategy,
   SuiteTaxStrategy,
   strategyFor,
