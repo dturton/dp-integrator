@@ -26,6 +26,13 @@ export {
   type NsOrderPayload,
 } from './payload-builder.js';
 export {
+  applyBalancing,
+  DEFAULT_BALANCING,
+  type BalancingDiagnostics,
+  type BalancingOptions,
+  type BalancedPayload,
+} from './balancing.js';
+export {
   buildDefaultLineItemsMap,
   buildDefaultOrderHeaderMap,
   buildDefaultShippingMap,
