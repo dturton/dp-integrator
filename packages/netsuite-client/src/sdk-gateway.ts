@@ -31,6 +31,12 @@ import type { NetSuiteGateway, UpsertResult } from './gateway.js';
  * `eid:`, so this is `false` in the common case. Caller treats as a hint.
  */
 export class SdkNetSuiteGateway implements NetSuiteGateway {
+  /**
+   * Cache: `${nsAccountId}::${sku}` → internal id or null (null is cached so
+   * repeated misses don't re-query NS). Process-lifetime; restart re-warms.
+   */
+  private readonly itemCache = new Map<string, string | null>();
+
   constructor(
     private readonly factory: NetSuiteClientFactory,
     private readonly accounts: ReadonlyMap<string, NsAccountConfig>,
@@ -104,6 +110,24 @@ export class SdkNetSuiteGateway implements NetSuiteGateway {
       .build();
 
     return client.suiteql.queryOne<Record<string, unknown>>(sql);
+  }
+
+  async resolveItemId(args: { nsAccountId: string; sku: string }): Promise<string | null> {
+    const cacheKey = `${args.nsAccountId}::${args.sku}`;
+    if (this.itemCache.has(cacheKey)) {
+      return this.itemCache.get(cacheKey) ?? null;
+    }
+    const account = this.resolveAccount(args.nsAccountId);
+    const client = await this.factory.get(account);
+    const sql = suiteql()
+      .select('id')
+      .from('item')
+      .whereEquals('itemid', args.sku)
+      .build();
+    const row = await client.suiteql.queryOne<{ id?: string | number }>(sql);
+    const id = row?.id !== undefined && row.id !== null ? String(row.id) : null;
+    this.itemCache.set(cacheKey, id);
+    return id;
   }
 }
 

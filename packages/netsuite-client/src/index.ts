@@ -33,6 +33,7 @@ export {
   type BalancingOptions,
   type BalancedPayload,
 } from './balancing.js';
+export { resolveItemReferences } from './item-resolver.js';
 export {
   buildDefaultLineItemsMap,
   buildDefaultOrderHeaderMap,

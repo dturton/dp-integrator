@@ -24,6 +24,9 @@ export class FakeNetSuiteGateway implements NetSuiteGateway {
   private failureQueue: Error[] = [];
   /** Optional latency injected per upsert call, ms. Used by the end-to-end concurrency test. */
   public latencyMs = 0;
+  /** account → sku → ns internal id. Seeded via `seedItem`; unseeded SKUs resolve to null. */
+  private readonly itemBySku = new Map<string, Map<string, string>>();
+  private resolveAttempts = 0;
 
   private bucket(
     nsAccountId: string,
@@ -94,5 +97,25 @@ export class FakeNetSuiteGateway implements NetSuiteGateway {
     recordType: RecordType,
   ): Map<string, { internalId: string; payload: Record<string, unknown> }> {
     return this.bucket(nsAccountId, recordType);
+  }
+
+  /** Seed an `itemid → ns internal id` mapping for `resolveItemId`. */
+  seedItem(nsAccountId: string, sku: string, internalId: string): void {
+    let acct = this.itemBySku.get(nsAccountId);
+    if (!acct) {
+      acct = new Map();
+      this.itemBySku.set(nsAccountId, acct);
+    }
+    acct.set(sku, internalId);
+  }
+
+  /** Total `resolveItemId` invocations — used to verify the cache short-circuits repeats. */
+  resolveItemAttemptCount(): number {
+    return this.resolveAttempts;
+  }
+
+  async resolveItemId(args: { nsAccountId: string; sku: string }): Promise<string | null> {
+    this.resolveAttempts += 1;
+    return this.itemBySku.get(args.nsAccountId)?.get(args.sku) ?? null;
   }
 }

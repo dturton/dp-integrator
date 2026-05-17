@@ -16,6 +16,7 @@ import {
   buildOrderPayload,
   defaultDeriveRegistry,
   netsuiteOrderRecordType,
+  resolveItemReferences,
   strategyFor,
   type NetSuiteGateway,
   type NsOrderPayload,
@@ -71,7 +72,7 @@ export interface OrderHandlerDeps {
 
 export type OrderHandlerOutcome =
   | { readonly kind: 'imported'; readonly connectionId: string; readonly orderGid: string; readonly targetId: string; readonly created: boolean; readonly customer: CustomerResolution }
-  | { readonly kind: 'parked'; readonly connectionId: string; readonly orderGid: string; readonly stage: 'mapping' | 'balancing'; readonly detail: string }
+  | { readonly kind: 'parked'; readonly connectionId: string; readonly orderGid: string; readonly stage: 'mapping' | 'balancing' | 'item_resolution'; readonly detail: string }
   | { readonly kind: 'ignored_by_eligibility'; readonly connectionId: string; readonly orderGid: string; readonly reason: EligibilityReason; readonly detail?: string }
   | { readonly kind: 'already_synced'; readonly connectionId: string; readonly orderGid: string }
   | { readonly kind: 'already_claimed'; readonly connectionId: string; readonly orderGid: string }
@@ -188,9 +189,26 @@ export async function handleOrderMessage(
       detail: balanced.parked.detail,
     };
   }
-  const finalPayload = balanced.payload.payload;
+  const balancedPayload = balanced.payload.payload;
 
-  // 9. NS upsert keyed on Shopify order GID
+  // 9. Item-id resolution — translate Shopify SKUs / shipping titles into
+  //    NS internal ids via the gateway's cached SuiteQL lookup. Unmapped
+  //    items park the order so operators can register the missing item in
+  //    NS (or fix the source) instead of silently failing at NS write.
+  const resolved = await resolveItemReferences(balancedPayload, deps.ns, connection.nsAccountId);
+  if (!resolved.ok) {
+    await deps.xrefStore.recordFailure(dedupKey);
+    return {
+      kind: 'parked',
+      connectionId: connection.connectionId,
+      orderGid: msg.orderGid,
+      stage: 'item_resolution',
+      detail: resolved.parked.detail,
+    };
+  }
+  const finalPayload = resolved.payload;
+
+  // 10. NS upsert keyed on Shopify order GID
   const recordType = netsuiteOrderRecordType(connection);
   const upserted = await deps.ns.upsertByExternalId({
     nsAccountId: connection.nsAccountId,

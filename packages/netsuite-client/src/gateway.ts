@@ -40,4 +40,21 @@ export interface NetSuiteGateway {
     externalId: string;
     fields?: readonly string[];
   }): Promise<Record<string, unknown> | null>;
+
+  /**
+   * Resolve a NetSuite `item` (inventory or shipping item) by its `itemid`
+   * column (the human-readable SKU / shipping-method name). Returns the
+   * NS internal id, or `null` when no item matches.
+   *
+   * NS REST won't accept a SKU string as `item.id` on a salesorder line —
+   * the line must reference the internal id. The order-import pipeline
+   * calls this for each line's SKU and each shipping line's title; misses
+   * park the order (the brief's "register the missing mapping, don't
+   * guess" stance).
+   *
+   * Implementations should cache resolutions for the process lifetime.
+   * SKU → internal id is stable for the lifetime of the item record, and
+   * one order frequently references the same SKU across multiple lines.
+   */
+  resolveItemId(args: { nsAccountId: string; sku: string }): Promise<string | null>;
 }

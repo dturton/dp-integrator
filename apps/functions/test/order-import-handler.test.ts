@@ -51,6 +51,11 @@ function buildDeps(args: {
   const shopify = new FakeShopifyGateway();
   const ns = new FakeNetSuiteGateway();
   const lookups = args.lookups ?? defaultLookups();
+  // Seed item resolutions used by makeFakeOrder so resolveItemReferences
+  // doesn't park the full-pipeline tests; individual tests that need a
+  // miss can reach into the returned ns and skip the seed for a specific SKU.
+  ns.seedItem(acme.nsAccountId, 'WIDGET-1', '11001');
+  ns.seedItem(acme.nsAccountId, 'SHIP-STANDARD', '12001');
   if (args.order) shopify.seedOrder(args.order);
   const deps: OrderHandlerDeps = {
     environment: 'dev',
@@ -213,6 +218,35 @@ describe('handleOrderMessage — Slice D5 full pipeline', () => {
   it('rethrows on Shopify re-fetch failure', async () => {
     const { deps } = buildDeps(); // no order seeded
     await expect(handleOrderMessage(deps, makeMessage())).rejects.toThrow(/not seeded/);
+  });
+
+  it('parks with stage=item_resolution when a SKU has no NS item', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const { deps, ns, xrefStore } = buildDeps({ order });
+    // Clear the WIDGET-1 seeding by recreating with a different sku gap.
+    // Simplest path: build a fresh ns without seeding WIDGET-1.
+    const ns2 = new (ns.constructor as new () => FakeNetSuiteGateway)();
+    ns2.seedItem(acme.nsAccountId, 'SHIP-STANDARD', '12001');
+    // WIDGET-1 intentionally NOT seeded.
+    (deps as { ns: FakeNetSuiteGateway }).ns = ns2;
+
+    const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome.kind).toBe('parked');
+    if (outcome.kind === 'parked') {
+      expect(outcome.stage).toBe('item_resolution');
+      expect(outcome.detail).toMatch(/WIDGET-1/);
+    }
+    // xref marked error so redelivery short-circuits via already_claimed
+    const row = await xrefStore.lookup({
+      environment: 'dev',
+      connectionId: acme.connectionId,
+      entityType: 'order',
+      sourceSystem: 'shopify',
+      sourceId: 'gid://shopify/Order/12345',
+    });
+    expect(row?.status).toBe('error');
+    // No salesorder was attempted.
+    expect(ns2.getRecords(acme.nsAccountId, 'salesorder' as never).size).toBe(0);
   });
 
   it('rethrows on NS upsert failure (customer succeeds, order fails)', async () => {
