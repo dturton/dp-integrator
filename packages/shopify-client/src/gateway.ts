@@ -24,6 +24,29 @@ export interface ShopifyGateway {
    */
   verifyWebhook(input: { rawBody: string; hmac: string; secret: string }): boolean;
 
-  /** Re-fetch a single order by Shopify GID for the given connection. */
+  /**
+   * Re-fetch a single order by Shopify GID for the given connection.
+   *
+   * Implementations must throw `OrderNotFoundError` when the order simply
+   * does not exist in the store (Shopify GraphQL `data.order === null`).
+   * All other failures — HTTP errors, GraphQL errors, transport issues —
+   * should propagate as ordinary `Error`s so the SB handler retries them.
+   */
   getOrder(connection: Connection, orderGid: string): Promise<ShopifyOrder>;
+}
+
+/**
+ * Thrown by `ShopifyGateway.getOrder` when Shopify reports the order as
+ * missing. Distinct from generic errors because the handler treats it as a
+ * permanent park (no point retrying) rather than a transient failure.
+ */
+export class OrderNotFoundError extends Error {
+  readonly orderGid: string;
+  readonly shopDomain: string;
+  constructor(orderGid: string, shopDomain: string) {
+    super(`order '${orderGid}' not found on ${shopDomain}`);
+    this.name = 'OrderNotFoundError';
+    this.orderGid = orderGid;
+    this.shopDomain = shopDomain;
+  }
 }

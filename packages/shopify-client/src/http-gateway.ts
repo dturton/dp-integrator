@@ -1,5 +1,5 @@
 import type { Connection, SecretProvider } from '@dpi/core';
-import type { ShopifyGateway } from './gateway.js';
+import { OrderNotFoundError, type ShopifyGateway } from './gateway.js';
 import { verifyShopifyHmac } from './hmac.js';
 import type {
   MoneyV2,
@@ -90,9 +90,7 @@ export class ShopifyHttpGateway implements ShopifyGateway {
       );
     }
     if (!json.data?.order) {
-      throw new Error(
-        `ShopifyHttpGateway.getOrder: order '${orderGid}' not found on ${connection.shopifyStore}`,
-      );
+      throw new OrderNotFoundError(orderGid, connection.shopifyStore);
     }
     return mapGraphQLOrder(json.data.order);
   }

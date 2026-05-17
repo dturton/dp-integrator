@@ -21,7 +21,7 @@ import {
   type NetSuiteGateway,
   type NsOrderPayload,
 } from '@dpi/netsuite-client';
-import type { ShopifyGateway, ShopifyOrder } from '@dpi/shopify-client';
+import { OrderNotFoundError, type ShopifyGateway, type ShopifyOrder } from '@dpi/shopify-client';
 import { checkEligibility, type EligibilityReason } from '@dpi/mapping-engine';
 import {
   resolveCustomer,
@@ -72,7 +72,7 @@ export interface OrderHandlerDeps {
 
 export type OrderHandlerOutcome =
   | { readonly kind: 'imported'; readonly connectionId: string; readonly orderGid: string; readonly targetId: string; readonly created: boolean; readonly customer: CustomerResolution }
-  | { readonly kind: 'parked'; readonly connectionId: string; readonly orderGid: string; readonly stage: 'mapping' | 'balancing' | 'item_resolution'; readonly detail: string }
+  | { readonly kind: 'parked'; readonly connectionId: string; readonly orderGid: string; readonly stage: 'fetch' | 'mapping' | 'balancing' | 'item_resolution'; readonly detail: string }
   | { readonly kind: 'ignored_by_eligibility'; readonly connectionId: string; readonly orderGid: string; readonly reason: EligibilityReason; readonly detail?: string }
   | { readonly kind: 'already_synced'; readonly connectionId: string; readonly orderGid: string }
   | { readonly kind: 'already_claimed'; readonly connectionId: string; readonly orderGid: string }
@@ -126,7 +126,26 @@ export async function handleOrderMessage(
   // claim.outcome === 'claimed' — proceed.
 
   // 3. Re-fetch authoritative order
-  const order: ShopifyOrder = await deps.shopify.getOrder(connection, msg.orderGid);
+  let order: ShopifyOrder;
+  try {
+    order = await deps.shopify.getOrder(connection, msg.orderGid);
+  } catch (err) {
+    if (err instanceof OrderNotFoundError) {
+      // Order was acknowledged at the receiver (HMAC valid, headers present)
+      // but no longer exists in the store — most commonly a synthetic test
+      // webhook or an order deleted before we got to import it. SB retries
+      // would never recover, so park instead of throwing.
+      await deps.xrefStore.recordFailure(dedupKey);
+      return {
+        kind: 'parked',
+        connectionId: connection.connectionId,
+        orderGid: msg.orderGid,
+        stage: 'fetch',
+        detail: err.message,
+      };
+    }
+    throw err;
+  }
 
   // 4. Eligibility predicate
   const elig = checkEligibility(order, msg.topic);

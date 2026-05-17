@@ -215,9 +215,35 @@ describe('handleOrderMessage — Slice D5 full pipeline', () => {
     expect(outcome).toMatchObject({ kind: 'rejected', reason: 'unknown_connection' });
   });
 
-  it('rethrows on Shopify re-fetch failure', async () => {
-    const { deps } = buildDeps(); // no order seeded
-    await expect(handleOrderMessage(deps, makeMessage())).rejects.toThrow(/not seeded/);
+  it('parks with stage=fetch when Shopify reports the order as not found', async () => {
+    // No order seeded → FakeShopifyGateway throws OrderNotFoundError on getOrder.
+    const { deps, xrefStore } = buildDeps();
+
+    const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome.kind).toBe('parked');
+    if (outcome.kind === 'parked') {
+      expect(outcome.stage).toBe('fetch');
+      expect(outcome.detail).toMatch(/not found/);
+    }
+    // xref row is marked error so SB redelivery short-circuits via already_claimed
+    // (not a transient throw + retry loop).
+    const row = await xrefStore.lookup({
+      environment: 'dev',
+      connectionId: acme.connectionId,
+      entityType: 'order',
+      sourceSystem: 'shopify',
+      sourceId: 'gid://shopify/Order/12345',
+    });
+    expect(row?.status).toBe('error');
+  });
+
+  it('rethrows on transient Shopify re-fetch failures (so SB retries)', async () => {
+    const { deps, shopify } = buildDeps();
+    // Swap getOrder for one that throws an arbitrary (non-OrderNotFound) error.
+    (shopify as unknown as { getOrder: typeof shopify.getOrder }).getOrder = async () => {
+      throw new Error('shopify: HTTP 503');
+    };
+    await expect(handleOrderMessage(deps, makeMessage())).rejects.toThrow(/503/);
   });
 
   it('parks with stage=item_resolution when a SKU has no NS item', async () => {

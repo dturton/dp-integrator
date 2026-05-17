@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { InMemorySecretProvider, type Connection } from '@dpi/core';
-import { ShopifyHttpGateway, ShopifyTokenService } from '../src/index.js';
+import { OrderNotFoundError, ShopifyHttpGateway, ShopifyTokenService } from '../src/index.js';
 
 const connection: Connection = {
   connectionId: 'dev-store-1',
@@ -193,7 +193,7 @@ describe('ShopifyHttpGateway.getOrder', () => {
     await expect(gateway.getOrder(connection, 'gid://shopify/Order/X')).rejects.toThrow(/GraphQL errors.*Field deprecated/);
   });
 
-  it('throws when order is not found (data.order is null)', async () => {
+  it('throws OrderNotFoundError when data.order is null', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(tokenResponse())
       .mockResolvedValueOnce(jsonResponse({ data: { order: null } }));
@@ -205,7 +205,8 @@ describe('ShopifyHttpGateway.getOrder', () => {
       fetchImpl: fetchMock,
       tokenService: new ShopifyTokenService({ fetchImpl: fetchMock }),
     });
-    await expect(gateway.getOrder(connection, 'gid://shopify/Order/missing')).rejects.toThrow(/not found/);
+    await expect(gateway.getOrder(connection, 'gid://shopify/Order/missing'))
+      .rejects.toThrow(OrderNotFoundError);
   });
 
   it('verifyWebhook delegates to the standalone HMAC verifier', () => {

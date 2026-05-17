@@ -1,5 +1,5 @@
 import type { Connection } from '@dpi/core';
-import type { ShopifyGateway } from './gateway.js';
+import { OrderNotFoundError, type ShopifyGateway } from './gateway.js';
 import type { ShopifyOrder } from './order.js';
 
 /**
@@ -25,10 +25,12 @@ export class FakeShopifyGateway implements ShopifyGateway {
     return this.verifier(input);
   }
 
-  async getOrder(_connection: Connection, orderGid: string): Promise<ShopifyOrder> {
+  async getOrder(connection: Connection, orderGid: string): Promise<ShopifyOrder> {
     const order = this.orders.get(orderGid);
     if (!order) {
-      throw new Error(`FakeShopifyGateway: order '${orderGid}' not seeded`);
+      // Mirror the http-gateway: a missing order is a typed not-found so
+      // the handler parks rather than treating it as a transient failure.
+      throw new OrderNotFoundError(orderGid, connection.shopifyStore);
     }
     return order;
   }
