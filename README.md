@@ -153,15 +153,58 @@ node apps/admin/dist/cli.js status
 node apps/admin/dist/cli.js parked --limit 30
 ```
 
-To retry a parked row after fixing the underlying issue:
+### Replay a parked or stuck order
 
-```sql
-DELETE FROM entity_xref WHERE source_id = 'gid://shopify/Order/<id>';
+The `dpi replay` verb (M2-A) atomically un-claims the xref row and republishes
+the order to Service Bus, so the import pipeline runs again as if Shopify had
+just delivered the webhook. Use this after fixing whatever caused the original
+park (a missing NS item, a bad map config, a network blip during NS upsert).
+
+One-time setup on top of the status/parked env:
+
+```bash
+# Resource references — pick from `az resource list -g <rg>`
+export DPI_SERVICE_BUS_NAMESPACE="dpi-sb-dev-<suffix>.servicebus.windows.net"
+
+# The same DPI_CONNECTIONS_JSON the function app reads (so the CLI can
+# resolve shopifyStore for the replayed message body):
+export DPI_CONNECTIONS_JSON="$(az functionapp config appsettings list \
+  --name <funcapp> --resource-group <rg> \
+  --query "[?name=='DPI_CONNECTIONS_JSON'].value | [0]" -o tsv)"
+
+# One-time Az role grant — your Entra principal must be able to publish to SB:
+USER_OID=$(az ad signed-in-user show --query id -o tsv)
+SUB=$(az account show --query id -o tsv)
+az role assignment create \
+  --assignee "$USER_OID" \
+  --role "Azure Service Bus Data Sender" \
+  --scope "/subscriptions/$SUB/resourceGroups/<rg>/providers/Microsoft.ServiceBus/namespaces/$DPI_SERVICE_BUS_NAMESPACE"
 ```
 
-Then redeliver the webhook (Shopify admin → webhook log → resend, or `curl`
-with a signed body). M2 will add a `dpi replay <gid>` verb that does both
-atomically.
+Then:
+
+```bash
+# Bare numeric id or full GID — both accepted
+node apps/admin/dist/cli.js replay 6828043305123 --connection dev-store-1
+
+# Force replay of an already-imported order (rare — only after you've manually
+# deleted / corrected the NS record).
+node apps/admin/dist/cli.js replay 6828043305123 --connection dev-store-1 --force
+```
+
+The verb refuses by default if the xref is `synced` (no double-import — see
+brief invariant 1). It deletes the row and publishes for `pending` / `error` /
+`ignored`; if no row exists it just publishes.
+
+A REST equivalent is mounted at `POST /api/admin/replay` (function-key auth)
+for ops who don't want to install the CLI:
+
+```bash
+KEY=$(az functionapp keys list --name <funcapp> -g <rg> --query functionKeys.default -o tsv)
+curl -sS -X POST "https://<funcapp>.azurewebsites.net/api/admin/replay?code=$KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"connectionId":"dev-store-1","orderGid":"6828043305123","force":false}'
+```
 
 ## Working with the NetSuite SDK
 

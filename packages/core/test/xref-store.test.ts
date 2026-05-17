@@ -82,4 +82,25 @@ describe('InMemoryXrefStore', () => {
     const result = await store.claim(input());
     expect(result.outcome).toBe('ignored');
   });
+
+  it('delete removes a parked row and returns its prior state', async () => {
+    const store = new InMemoryXrefStore();
+    await store.claim(input());
+    await store.recordFailure(input());
+
+    const removed = await store.delete(input());
+    expect(removed?.status).toBe('error');
+    expect(store.size()).toBe(0);
+
+    // A fresh claim on the same key behaves like a first-time claim.
+    const reclaim = await store.claim(input());
+    expect(reclaim.outcome).toBe('claimed');
+  });
+
+  it('delete is a no-op on a missing key (returns undefined, no throw)', async () => {
+    const store = new InMemoryXrefStore();
+    const removed = await store.delete(input());
+    expect(removed).toBeUndefined();
+    expect(store.size()).toBe(0);
+  });
 });

@@ -26,6 +26,9 @@ importers:
       '@azure/identity':
         specifier: ^4.4.1
         version: 4.13.1
+      '@azure/service-bus':
+        specifier: ^7.9.5
+        version: 7.9.5
       '@dpi/core':
         specifier: workspace:*
         version: link:../../packages/core

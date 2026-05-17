@@ -174,6 +174,26 @@ export class PostgresXrefStore implements XrefStore {
     return this.fetch(parts);
   }
 
+  async delete(parts: DedupKeyParts): Promise<XrefRow | undefined> {
+    const sql = `
+      DELETE FROM entity_xref
+       WHERE environment = $1
+         AND connection_id = $2
+         AND entity_type = $3
+         AND source_system = $4
+         AND source_id = $5
+       RETURNING *
+    `;
+    const r = await this.pool.query<XrefRowDb>(sql, [
+      parts.environment,
+      parts.connectionId,
+      parts.entityType,
+      parts.sourceSystem,
+      parts.sourceId,
+    ]);
+    return r.rows[0] ? toXrefRow(r.rows[0]) : undefined;
+  }
+
   private async fetch(parts: DedupKeyParts): Promise<XrefRow | undefined> {
     const sql = `
       SELECT * FROM entity_xref

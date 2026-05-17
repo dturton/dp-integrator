@@ -56,6 +56,17 @@ export interface XrefStore {
   recordFailure(parts: DedupKeyParts, sourceHash?: string): Promise<XrefRow>;
   markIgnored(parts: DedupKeyParts): Promise<XrefRow>;
   lookup(parts: DedupKeyParts): Promise<XrefRow | undefined>;
+  /**
+   * Drop the xref row for `parts`. Used by the M2 replay path to "un-claim"
+   * a parked or pending row so a re-published webhook will run through the
+   * pipeline again. Returns the row as it existed before deletion, or
+   * undefined if no row was present.
+   *
+   * Replay refuses to call delete on `status='synced'` without an explicit
+   * force — that policy lives in the requestReplay() shared lib, not here,
+   * so this method itself is a low-level primitive.
+   */
+  delete(parts: DedupKeyParts): Promise<XrefRow | undefined>;
 }
 
 /**
@@ -173,6 +184,15 @@ export class InMemoryXrefStore implements XrefStore {
 
   async lookup(parts: DedupKeyParts): Promise<XrefRow | undefined> {
     return this.rows.get(dedupKey(parts));
+  }
+
+  async delete(parts: DedupKeyParts): Promise<XrefRow | undefined> {
+    const key = dedupKey(parts);
+    return this.withLock(key, async () => {
+      const existing = this.rows.get(key);
+      this.rows.delete(key);
+      return existing;
+    });
   }
 
   /** Test helper. */

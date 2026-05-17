@@ -11,6 +11,7 @@
  */
 import { getAppContext } from './bootstrap.js';
 import { PostgresLookupResolver } from './adapters/index.js';
+import { registerAdminReplay } from './triggers/admin-replay.js';
 import { registerNsDiagnostic } from './triggers/ns-diagnostic.js';
 import { registerOrderImportHandler } from './triggers/order-import-handler.js';
 import { registerShopifyWebhook } from './triggers/shopify-webhook.js';
@@ -55,5 +56,17 @@ registerOrderImportHandler(() => {
     ns: ctx.ns,
     guestCustomerInternalId: ctx.guestCustomerInternalId,
     lookupsFor: (connection) => new PostgresLookupResolver(pool, connection),
+  };
+});
+
+// M2-A: REST admin replay surface. Reuses the AppContext's xrefStore + the
+// existing SB topic producer; `requestReplay` is the shared primitive.
+registerAdminReplay(() => {
+  const ctx = getAppContext();
+  return {
+    environment: ctx.environment,
+    connections: ctx.connections,
+    xrefStore: ctx.xrefStore,
+    queue: ctx.orderQueue,
   };
 });

@@ -30,6 +30,7 @@
  *   reasons <gid>     Full park history for one order
  */
 import { parkedCommand } from './commands/parked.js';
+import { replayCommand } from './commands/replay.js';
 import { statusCommand } from './commands/status.js';
 
 const USAGE = `dpi — dp-integrator ops dashboard
@@ -37,13 +38,19 @@ const USAGE = `dpi — dp-integrator ops dashboard
 Usage: dpi <command> [options]
 
 Commands:
-  status               One-screen overview of the integration's state
-  parked [--limit N]   List parked orders (xref status='error') with reasons
-  help                 Show this message
+  status                  One-screen overview of the integration's state
+  parked [--limit N]      List parked orders (xref status='error') with reasons
+  replay <gid|id>         Re-publish an order through the import pipeline
+      --connection <id>     required — connection id from \`dpi parked\` output
+      --force               override the refusal when xref status='synced'
+      --topic <t>           webhook topic stamped on the message (default orders/updated)
+  help                    Show this message
 
-Env: DPI_PG_HOST, DPI_PG_DATABASE, DPI_PG_USER required.
-     DPI_AI_APP_ID enables log-backed reason info.
+Env: DPI_PG_HOST, DPI_PG_DATABASE, DPI_PG_USER required for all verbs.
+     DPI_AI_APP_ID enables log-backed reason info on status/parked.
      DPI_ENVIRONMENT defaults to 'dev'.
+     replay also needs: DPI_SERVICE_BUS_NAMESPACE, DPI_CONNECTIONS_JSON, and
+     'Azure Service Bus Data Sender' on the operator's Entra principal.
 `;
 
 async function main(): Promise<void> {
@@ -60,6 +67,9 @@ async function main(): Promise<void> {
       return;
     case 'parked':
       await parkedCommand(rest);
+      return;
+    case 'replay':
+      await replayCommand(rest);
       return;
     default:
       process.stderr.write(`dpi: unknown command '${verb}'\n\n${USAGE}`);

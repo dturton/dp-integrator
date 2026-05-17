@@ -56,6 +56,15 @@ export {
   type ConnectionsRepo,
 } from './connections/connections-repo.js';
 
+// Replay (M2)
+export {
+  requestReplay,
+  type OrderWebhookMessageBody,
+  type ReplayDeps,
+  type ReplayOutcome,
+  type ReplayRequest,
+} from './replay/replay.js';
+
 // Governor
 export {
   PerProcessGovernorStore,
