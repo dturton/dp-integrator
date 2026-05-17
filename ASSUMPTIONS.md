@@ -104,6 +104,43 @@ or the v2 architecture spec. These are reversible; flag any that conflict with i
   `Key Vault Secrets User` on the vault. Centralized in
   `infra/modules/role-assignments.bicep` to avoid a function-app ↔ SB/KV cycle.
 
+## Database: Postgres Flex (not Azure SQL)
+
+- **The brief specifies "Azure SQL".** We switched to **Azure Database for
+  PostgreSQL Flexible Server** because Azure SQL is gated by a per-subscription
+  `ProvisioningDisabled` rule in every region we tried for this subscription
+  (eastus, eastus2; quota API reports `limit=250` but the deploy is rejected
+  pre-quota by an opaque subscription-capacity check). Unblocking it requires a
+  Microsoft support ticket of type "Service and subscription limits" — typically
+  24–48h. Postgres Flex is not gated the same way.
+- **Why Postgres over file-an-MS-ticket-and-wait:**
+  - Unblocked today, not in 48h.
+  - Open-source, no MSSQL vendor lock-in.
+  - Entra ID auth supported natively (`activeDirectoryAuth` on Flex Server),
+    so the Function App MI can authenticate without password — same security
+    posture we'd want from Azure SQL.
+  - Cheaper at our scale (Burstable B1ms ≈ $13/mo vs GP_S_Gen5_1 ≈ $370/mo for
+    serverless idle).
+- **What changes in the codebase:**
+  - `XrefStore`, `ErrorStore` interfaces in `@dpi/core` stay unchanged — they
+    were always DB-agnostic.
+  - Slice B's SQL adapter uses `pg` (node-postgres) instead of `mssql`.
+  - DDL migrations (`infra/db/migrations/*`) are Postgres dialect:
+    `NVARCHAR` → `VARCHAR/TEXT`, `DATETIME2` → `TIMESTAMPTZ`, `BIT` → `BOOLEAN`,
+    `BIGINT IDENTITY` → `BIGSERIAL`, `NVARCHAR(MAX)` → `TEXT`, JSON columns are
+    `JSONB`, `SYSUTCDATETIME()` → `NOW()`.
+- **Function App MI → Postgres Entra auth (Slice B):** Bicep enables
+  `authConfig.activeDirectoryAuth=Enabled` on the server. After server
+  provisioning, a one-time `az postgres flexible-server ad-admin create` (or
+  equivalent) adds the Function App's MI as a Postgres Entra principal; then
+  inside Postgres we `CREATE ROLE …` for the MI's display name and grant
+  `CONNECT`/`USAGE`/table privileges. The `pg` driver gets a token via
+  `DefaultAzureCredential` and uses it as the connection password
+  (`OSSRDBMS_TOKEN_AUDIENCE` resource).
+- **Bootstrap admin password:** kept as `POSTGRES_ADMIN_PASSWORD` in GH env
+  secrets only for the first deploy + the one-time `ad-admin` grant. Not used
+  by the application at runtime.
+
 ## Open / deferred
 
 - **Real Azure SQL for tests:** not used in M0 (in-memory stores cover the unit-test surface). A

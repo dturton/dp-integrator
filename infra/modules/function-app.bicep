@@ -7,10 +7,12 @@ param tags object
 param appInsightsConnectionString string
 param keyVaultUri string
 param serviceBusNamespace string
-@description('Optional — empty string when SQL is not deployed yet (Slice A).')
-param sqlServerFqdn string = ''
-@description('Optional — empty string when SQL is not deployed yet (Slice A).')
-param sqlDatabaseName string = ''
+@description('Optional — empty string when Postgres is not deployed yet.')
+param postgresHost string = ''
+@description('Optional — empty string when Postgres is not deployed yet.')
+param postgresDatabase string = ''
+@description('Optional — empty string when Postgres is not deployed yet.')
+param postgresAdminLogin string = ''
 
 @description('JSON array of connections (string) to bootstrap the receiver. Default empty array; operator seeds via az CLI or pipeline.')
 param connectionsJson string = '[]'
@@ -154,12 +156,16 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
           value: connectionsJson
         }
         {
-          name: 'SQL_SERVER_FQDN'
-          value: sqlServerFqdn
+          name: 'POSTGRES_HOST'
+          value: postgresHost
         }
         {
-          name: 'SQL_DATABASE_NAME'
-          value: sqlDatabaseName
+          name: 'POSTGRES_DATABASE'
+          value: postgresDatabase
+        }
+        {
+          name: 'POSTGRES_ADMIN_LOGIN'
+          value: postgresAdminLogin
         }
       ]
     }

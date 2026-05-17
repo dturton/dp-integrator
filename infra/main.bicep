@@ -1,8 +1,15 @@
 // dp-integrator infra root — subscription-scoped.
 //
-// Composes the five service modules: Function App (Flex Consumption + always-ready
-// instances), Service Bus (topic + session-required subscription + DLQ), Azure SQL,
-// Key Vault, and App Insights (with Log Analytics workspace backing it).
+// Composes the service modules: Function App (Flex Consumption + always-ready
+// instances), Service Bus (topic + session-required subscription + DLQ), Postgres
+// Flexible Server, Key Vault, App Insights (with Log Analytics backing it), and
+// the centralized RBAC module that grants the Function App MI access to SB / KV
+// / Blob.
+//
+// Postgres replaces Azure SQL Database — Azure SQL is gated by an opaque
+// per-subscription "ProvisioningDisabled" rule in every region we tried for
+// this subscription. Postgres Flex is not gated the same way and supports
+// Entra ID auth for the Function App MI.
 //
 // Usage (see Makefile):
 //   make infra-plan   ENV=dev    # dry-run (az deployment sub what-if)
@@ -21,8 +28,8 @@ param environmentName string
 @description('Azure region for all resources.')
 param location string = 'eastus2'
 
-@description('Override region for Azure SQL only. Some subscriptions have SQL provisioning disabled in specific regions (returns ProvisioningDisabled / Conflict) and a different region is the only fix without a quota support ticket. Defaults to `location`.')
-param sqlLocation string = location
+@description('Override region for Postgres only. Postgres Flex is widely available so this normally matches `location`; kept as an escape hatch for capacity issues.')
+param postgresLocation string = location
 
 @description('Resource group to create (or update) for this environment.')
 param resourceGroupName string = 'rg-dpi-${environmentName}'
@@ -31,12 +38,12 @@ param resourceGroupName string = 'rg-dpi-${environmentName}'
 @maxLength(8)
 param namePrefix string = 'dpi'
 
-@description('Azure SQL admin login.')
-param sqlAdminLogin string = 'dpi-admin'
+@description('Postgres admin login. Used to bootstrap the server; Function App MI gets Entra access via a post-deploy step (Slice B).')
+param postgresAdminLogin string = 'dpiadmin'
 
-@description('Azure SQL admin password.')
+@description('Postgres admin password.')
 @secure()
-param sqlAdminPassword string
+param postgresAdminPassword string
 
 @description('Object ID (principal) granted Key Vault Secrets Officer at deploy time. Usually the deploying user/service principal.')
 param keyVaultAdminPrincipalId string = ''
@@ -44,8 +51,8 @@ param keyVaultAdminPrincipalId string = ''
 @description('JSON-stringified array of connection records to seed the receiver with. Defaults to an empty array; operator seeds via az CLI / pipeline secret. NEVER include raw secrets — connections carry KV refs.')
 param connectionsJson string = '[]'
 
-@description('Deploy Azure SQL server + database. Slice A (webhook receiver) does NOT require SQL — set this to false when SQL provisioning is restricted in the available regions for the subscription (ProvisioningDisabled). Slice B will require it (re-enable then, after either a support-ticket quota grant or a migration to Postgres Flexible Server).')
-param deploySql bool = true
+@description('Deploy Postgres Flex server + database. Slice A (webhook receiver) does NOT require Postgres; Slice B onward does.')
+param deployPostgres bool = true
 
 var commonTags = {
   workload: 'dp-integrator'
@@ -82,16 +89,16 @@ module keyVault './modules/key-vault.bicep' = {
   }
 }
 
-module sql './modules/sql.bicep' = if (deploySql) {
+module postgres './modules/postgres.bicep' = if (deployPostgres) {
   scope: rg
-  name: 'sql'
+  name: 'postgres'
   params: {
     namePrefix: namePrefix
     environmentName: environmentName
-    location: sqlLocation
+    location: postgresLocation
     tags: commonTags
-    sqlAdminLogin: sqlAdminLogin
-    sqlAdminPassword: sqlAdminPassword
+    postgresAdminLogin: postgresAdminLogin
+    postgresAdminPassword: postgresAdminPassword
   }
 }
 
@@ -117,8 +124,9 @@ module functionApp './modules/function-app.bicep' = {
     appInsightsConnectionString: appInsights.outputs.connectionString
     keyVaultUri: keyVault.outputs.vaultUri
     serviceBusNamespace: serviceBus.outputs.namespaceName
-    sqlServerFqdn: deploySql ? sql.outputs.serverFqdn : ''
-    sqlDatabaseName: deploySql ? sql.outputs.databaseName : ''
+    postgresHost: deployPostgres ? postgres.outputs.serverFqdn : ''
+    postgresDatabase: deployPostgres ? postgres.outputs.databaseName : ''
+    postgresAdminLogin: deployPostgres ? postgres.outputs.adminLogin : ''
     connectionsJson: connectionsJson
   }
 }
@@ -138,8 +146,8 @@ output functionAppPrincipalId string = functionApp.outputs.principalId
 output keyVaultUri string = keyVault.outputs.vaultUri
 output keyVaultName string = keyVault.outputs.vaultName
 output serviceBusNamespace string = serviceBus.outputs.namespaceName
-output sqlServerFqdn string = deploySql ? sql.outputs.serverFqdn : ''
-output sqlDatabaseName string = deploySql ? sql.outputs.databaseName : ''
+output postgresHost string = deployPostgres ? postgres.outputs.serverFqdn : ''
+output postgresDatabase string = deployPostgres ? postgres.outputs.databaseName : ''
 output appInsightsConnectionString string = appInsights.outputs.connectionString
 output storageAccountName string = functionApp.outputs.storageAccountName
 output storageBlobEndpoint string = functionApp.outputs.storageBlobEndpoint

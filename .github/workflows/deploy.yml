@@ -5,7 +5,7 @@ name: Deploy
 #   - Azure Entra app registration with federated credential for this repo+env
 #   - GH Environment per target (dev, sandbox) with secrets:
 #       AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
-#       SQL_ADMIN_PASSWORD, KEY_VAULT_ADMIN_PRINCIPAL_ID
+#       POSTGRES_ADMIN_PASSWORD, KEY_VAULT_ADMIN_PRINCIPAL_ID
 #       DPI_CONNECTIONS_JSON  (the connection registry — JSON array, NO raw secrets)
 
 on:
@@ -72,7 +72,7 @@ jobs:
         if: ${{ github.event.inputs.deploy_infra == 'true' }}
         id: bicep
         env:
-          SQL_ADMIN_PASSWORD: ${{ secrets.SQL_ADMIN_PASSWORD }}
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
           KV_ADMIN_PRINCIPAL_ID: ${{ secrets.KEY_VAULT_ADMIN_PRINCIPAL_ID }}
           DPI_CONNECTIONS_JSON: ${{ secrets.DPI_CONNECTIONS_JSON }}
         run: |
@@ -83,7 +83,7 @@ jobs:
             --location eastus2 \
             --template-file infra/main.bicep \
             --parameters "infra/parameters/${{ github.event.inputs.environment }}.bicepparam" \
-            --parameters sqlAdminPassword="$SQL_ADMIN_PASSWORD" \
+            --parameters postgresAdminPassword="$POSTGRES_ADMIN_PASSWORD" \
             --parameters keyVaultAdminPrincipalId="$KV_ADMIN_PRINCIPAL_ID" \
             --parameters connectionsJson="$DPI_CONNECTIONS_JSON" \
             --query properties.outputs \

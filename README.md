@@ -73,7 +73,8 @@ One-time setup per Azure subscription:
    Bicep + Function App deploys.
 2. **GitHub Environment** per target (`dev`, `sandbox`) with secrets:
    - `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
-   - `SQL_ADMIN_PASSWORD` — Azure SQL admin password (one-time bootstrap)
+   - `POSTGRES_ADMIN_PASSWORD` — Postgres Flex admin password (one-time bootstrap;
+     Function App MI gets Entra auth in Slice B)
    - `KEY_VAULT_ADMIN_PRINCIPAL_ID` — object ID of the deploying principal,
      granted `Key Vault Secrets Officer` so post-deploy scripts can write secrets
    - `DPI_CONNECTIONS_JSON` — JSON array of `Connection` records
