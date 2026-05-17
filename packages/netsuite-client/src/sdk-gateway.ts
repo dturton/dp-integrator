@@ -57,10 +57,16 @@ export class SdkNetSuiteGateway implements NetSuiteGateway {
       `https://${normalizedAccount}.suitetalk.api.netsuite.com` +
       `/services/rest/record/v1/${args.recordType}/eid:${nsExternalId}`;
 
-    const response = await transportOf(client).request(url, {
-      method: 'PUT',
-      body: args.payload,
-    });
+    // NS rejects the request (422 NONEXISTENT_EXTERNAL_ID) when the body has
+    // an `externalid` field that doesn't match the URL's `eid:` value. The URL
+    // already specifies the external id; strip any caller-supplied externalid
+    // from the body so the gateway is the single source of truth.
+    const body = stripExternalId(args.payload);
+    const response = await transportOf(client)
+      .request(url, { method: 'PUT', body })
+      .catch((err) => {
+        throw decorateNsError(err, `upsert ${args.recordType} eid:${nsExternalId}`);
+      });
 
     const internalId = extractInternalId(response);
     if (!internalId) {
@@ -114,6 +120,32 @@ function transportOf(client: unknown): SdkTransport {
     throw new Error('SdkNetSuiteGateway: NetSuiteClient.transport is missing the request method');
   }
   return t;
+}
+
+/**
+ * Wrap a NetSuiteError into a plain Error whose `message` includes the NS
+ * error `details` (which the Azure Functions host serializer drops). Keeps
+ * the original error attached via `cause` so downstream callers can still
+ * introspect it.
+ */
+function decorateNsError(err: unknown, context: string): Error {
+  const e = err as { name?: string; status?: number; message?: string; details?: unknown };
+  if (e?.name !== 'NetSuiteError') return err as Error;
+  const detailsStr =
+    e.details !== undefined ? ` details=${JSON.stringify(e.details).slice(0, 1500)}` : '';
+  const wrapped = new Error(`NS ${context} status=${e.status} ${e.message ?? ''}${detailsStr}`);
+  (wrapped as { cause?: unknown }).cause = err;
+  return wrapped;
+}
+
+function stripExternalId(payload: Record<string, unknown>): Record<string, unknown> {
+  // Drop any case-variant of "externalid" / "externalId" — NS treats them
+  // equivalently and any mismatch with the URL fails with 422.
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (k.toLowerCase() !== 'externalid') out[k] = v;
+  }
+  return out;
 }
 
 function extractInternalId(response: {
