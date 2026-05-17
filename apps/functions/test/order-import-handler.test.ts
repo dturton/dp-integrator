@@ -275,21 +275,14 @@ describe('handleOrderMessage — Slice D5 full pipeline', () => {
     expect(ns2.getRecords(acme.nsAccountId, 'salesorder' as never).size).toBe(0);
   });
 
-  it('rethrows on NS upsert failure (customer succeeds, order fails)', async () => {
+  it('parks an unclassified NS upsert failure (errorClass=unknown, stage=external_call)', async () => {
+    // The brief's stance: "treat unknown like data so we never silently
+    // retry-loop on a novel shape." M2-C wraps the post-claim pipeline in
+    // a try/catch + classifier; a bare Error('ns order write failed')
+    // hits no transient / auth / data cue, so it parks rather than throws.
     const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
-    const { deps, ns } = buildDeps({ order });
-    // First upsert is customer (succeeds), second is salesorder (fails).
-    ns.failNext = ((original) => {
-      let count = 0;
-      return function (err: Error) {
-        count++;
-        if (count === 2) original.call(ns, err);
-        else original.call(ns, new Error('placeholder')); // never used
-      };
-    })(ns.failNext);
-    // Simpler approach: directly fail the *second* NS call by failing only after the customer succeeds.
+    const { deps, ns, xrefStore } = buildDeps({ order });
     const realFailNext = FakeNetSuiteGateway.prototype.failNext.bind(ns);
-    // Customer write happens first; let it through, then queue a failure for the order.
     await deps.ns.upsertByExternalId({
       nsAccountId: 'priming',
       recordType: 'noop' as never,
@@ -297,6 +290,30 @@ describe('handleOrderMessage — Slice D5 full pipeline', () => {
       payload: {},
     }).catch(() => undefined); // burn a counter so failNext aligns
     realFailNext(new Error('ns order write failed'));
-    await expect(handleOrderMessage(deps, makeMessage())).rejects.toThrow();
+
+    const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome.kind).toBe('parked');
+    if (outcome.kind === 'parked') {
+      expect(outcome.stage).toBe('external_call');
+      expect(outcome.errorClass).toBe('unknown');
+      expect(outcome.detail).toMatch(/ns order write failed/);
+    }
+    const row = await xrefStore.lookup({
+      environment: 'dev',
+      connectionId: acme.connectionId,
+      entityType: 'order',
+      sourceSystem: 'shopify',
+      sourceId: 'gid://shopify/Order/12345',
+    });
+    expect(row?.status).toBe('error');
+  });
+
+  it('rethrows transient errors (HTTP 5xx / network) so SB retries', async () => {
+    const { deps, shopify } = buildDeps();
+    // Swap getOrder for one that throws a transient-shaped error.
+    (shopify as unknown as { getOrder: typeof shopify.getOrder }).getOrder = async () => {
+      throw new Error('store-x.myshopify.com returned 503: upstream busy');
+    };
+    await expect(handleOrderMessage(deps, makeMessage())).rejects.toThrow(/503/);
   });
 });
