@@ -143,6 +143,14 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'SERVICE_BUS_TOPIC'
           value: 'orders-in'
         }
+        // Identity-based binding for the v4 Service Bus trigger.
+        // `connection: 'SERVICE_BUS'` in the trigger resolves to this app
+        // setting; MI on the Function App is granted SB Data Receiver in
+        // role-assignments.bicep.
+        {
+          name: 'SERVICE_BUS__fullyQualifiedNamespace'
+          value: '${serviceBusNamespace}.servicebus.windows.net'
+        }
         {
           name: 'BLOB_ACCOUNT_URL'
           value: storage.properties.primaryEndpoints.blob

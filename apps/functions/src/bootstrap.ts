@@ -1,3 +1,4 @@
+import type pg from 'pg';
 import {
   InMemoryConnectionsRepo,
   isEnvironment,
@@ -6,11 +7,14 @@ import {
   type Environment,
   type QueueProducer,
   type SecretProvider,
+  type XrefStore,
 } from '@dpi/core';
 import {
   BlobEnvelopeStore,
   KeyVaultSecretProvider,
+  PostgresXrefStore,
   ServiceBusQueueProducer,
+  buildPgPool,
   type EnvelopeStore,
 } from './adapters/index.js';
 import type { OrderWebhookMessage } from './messages.js';
@@ -20,8 +24,9 @@ import type { OrderWebhookMessage } from './messages.js';
  * Settings). Constructed once per process; the Function host reuses it across
  * invocations.
  *
- * Slice A only needs the receiver dependencies. Slice B will extend this with
- * `XrefStore`, `ErrorStore`, `NetSuiteClientFactory`, `ShopifyGateway`, etc.
+ * Slice B adds the Postgres pool + `XrefStore` for the order handler. The
+ * pool is lazy — `pg.Pool` doesn't open a TCP connection until a query runs,
+ * so the receiver path stays unaffected.
  */
 export interface AppContext {
   readonly environment: Environment;
@@ -29,6 +34,9 @@ export interface AppContext {
   readonly secrets: SecretProvider;
   readonly envelopeStore: EnvelopeStore;
   readonly orderQueue: QueueProducer<OrderWebhookMessage>;
+  /** Slice B+. May be undefined when Postgres isn't deployed (e.g. early Slice A envs). */
+  readonly pgPool?: pg.Pool;
+  readonly xrefStore?: XrefStore;
 }
 
 let cached: AppContext | undefined;
@@ -59,6 +67,19 @@ function buildAppContext(): AppContext {
   const connectionsJson = requireEnv('DPI_CONNECTIONS_JSON');
   const parsed = parseConnectionsConfig(connectionsJson);
 
+  // Postgres is optional at the bootstrap layer so a Slice-A-only env can boot
+  // without it. The order-import handler (Slice B+) refuses to start if
+  // xrefStore isn't present.
+  const pgHost = process.env['POSTGRES_HOST'];
+  const pgDatabase = process.env['POSTGRES_DATABASE'];
+  const pgUser = process.env['POSTGRES_MI_USER'] ?? process.env['WEBSITE_SITE_NAME'];
+  let pgPool: pg.Pool | undefined;
+  let xrefStore: XrefStore | undefined;
+  if (pgHost && pgDatabase && pgUser) {
+    pgPool = buildPgPool({ host: pgHost, database: pgDatabase, user: pgUser });
+    xrefStore = new PostgresXrefStore(pgPool);
+  }
+
   return {
     environment,
     connections: new InMemoryConnectionsRepo(parsed),
@@ -71,6 +92,8 @@ function buildAppContext(): AppContext {
       fullyQualifiedNamespace: serviceBusNamespace,
       topic: serviceBusTopic,
     }),
+    ...(pgPool ? { pgPool } : {}),
+    ...(xrefStore ? { xrefStore } : {}),
   };
 }
 

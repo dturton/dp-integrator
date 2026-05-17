@@ -6,3 +6,5 @@ export {
   type EnvelopeStore,
   type WebhookEnvelopePayload,
 } from './blob-envelope-store.js';
+export { buildPgPool, type PgPoolConfig } from './pg-pool.js';
+export { PostgresXrefStore } from './postgres-xref-store.js';

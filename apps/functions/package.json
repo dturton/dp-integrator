@@ -17,6 +17,10 @@
     "@dpi/core": "workspace:*",
     "@dpi/shopify-client": "workspace:*",
     "@dpi/netsuite-client": "workspace:*",
-    "@dpi/mapping-engine": "workspace:*"
+    "@dpi/mapping-engine": "workspace:*",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10"
   }
 }
