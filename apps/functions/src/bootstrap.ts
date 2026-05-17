@@ -1,15 +1,24 @@
 import type pg from 'pg';
 import {
   InMemoryConnectionsRepo,
+  SharedInMemoryGovernorStore,
   isEnvironment,
   parseConnectionsConfig,
+  type Connection,
   type ConnectionsRepo,
   type Environment,
+  type GovernorConfig,
   type QueueProducer,
   type SecretProvider,
   type XrefStore,
 } from '@dpi/core';
-import { FakeNetSuiteGateway, type NetSuiteGateway } from '@dpi/netsuite-client';
+import {
+  FakeNetSuiteGateway,
+  NetSuiteClientFactory,
+  SdkNetSuiteGateway,
+  type NetSuiteGateway,
+  type NsAccountConfig,
+} from '@dpi/netsuite-client';
 import { ShopifyHttpGateway, type ShopifyGateway } from '@dpi/shopify-client';
 import {
   BlobEnvelopeStore,
@@ -75,12 +84,12 @@ function buildAppContext(): AppContext {
   const secrets = new KeyVaultSecretProvider({ vaultUri });
   const shopify = new ShopifyHttpGateway({ secrets });
 
-  // Slice C ships a FakeNetSuiteGateway stub in prod so the customer-resolve
-  // step has somewhere to land. The handler exercises the full upstream path
-  // (re-fetch, eligibility, customer build) but customer "internal ids" are
-  // synthetic + reset on cold start. Slice D replaces this with the real
-  // SdkNetSuiteGateway via NetSuiteClientFactory + per-account TBA creds.
-  const ns: NetSuiteGateway = new FakeNetSuiteGateway();
+  // NS gateway: when any connection carries a real nsAccountId (anything other
+  // than the 'pending' placeholder), build a SdkNetSuiteGateway against the
+  // first-party netsuite-sdk with per-account TBA creds resolved from KV.
+  // If nothing is configured, fall back to FakeNetSuiteGateway so the pipeline
+  // still runs end-to-end (handler logs synthetic ids, xref still flips synced).
+  const ns: NetSuiteGateway = buildNetSuiteGateway(parsed, secrets);
 
   // Postgres is optional at the bootstrap layer so a Slice-A-only env can boot
   // without it. The order-import handler (Slice B+) refuses to start if
@@ -121,4 +130,53 @@ function requireEnv(key: string): string {
     throw new Error(`bootstrap: required env var '${key}' is not set`);
   }
   return value;
+}
+
+/**
+ * Pick the NetSuiteGateway impl based on which connections have real
+ * nsAccountIds. A connection with nsAccountId='pending' (or any other empty
+ * placeholder) opts that account out of real NS writes; the handler still
+ * runs end-to-end against the FakeNetSuiteGateway in that case.
+ *
+ * The KV secret-ref convention matches what we used in `az keyvault secret
+ * set` for the dev account:
+ *   ns-<sanitized-accountId>-consumer-key
+ *   ns-<sanitized-accountId>-consumer-secret
+ *   ns-<sanitized-accountId>-token-id
+ *   ns-<sanitized-accountId>-token-secret
+ * KV secret names disallow underscores; sanitize matches `[a-z]+[a-z0-9-]*`.
+ *
+ * Governor: per-account in-flight ceiling 10 (well below SuiteTalk's
+ * concurrency governor). The SharedInMemoryGovernorStore is per-instance —
+ * Slice E or M2 introduces a SQL-backed store for cross-instance correctness.
+ */
+function buildNetSuiteGateway(
+  connections: readonly Connection[],
+  secrets: SecretProvider,
+): NetSuiteGateway {
+  const realAccountIds = new Set(
+    connections
+      .map((c) => c.nsAccountId)
+      .filter((id) => id.length > 0 && id !== 'pending'),
+  );
+  if (realAccountIds.size === 0) {
+    return new FakeNetSuiteGateway();
+  }
+  const accounts = new Map<string, NsAccountConfig>();
+  for (const accountId of realAccountIds) {
+    const sanitized = accountId.toLowerCase().replace(/_/g, '-');
+    accounts.set(accountId, {
+      accountId,
+      credentials: {
+        consumerKeyRef: `ns-${sanitized}-consumer-key`,
+        consumerSecretRef: `ns-${sanitized}-consumer-secret`,
+        tokenKeyRef: `ns-${sanitized}-token-id`,
+        tokenSecretRef: `ns-${sanitized}-token-secret`,
+      },
+    });
+  }
+  const governorConfig: GovernorConfig = { perAccountCeiling: 10 };
+  const governorStore = new SharedInMemoryGovernorStore(governorConfig.perAccountCeiling);
+  const factory = new NetSuiteClientFactory(secrets, governorStore, governorConfig);
+  return new SdkNetSuiteGateway(factory, accounts);
 }
