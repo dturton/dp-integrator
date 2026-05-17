@@ -13,3 +13,4 @@ coverage/
 .vitest-temp/
 *.log
 .bicep-build/
+.claude/
