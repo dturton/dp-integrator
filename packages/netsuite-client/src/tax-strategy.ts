@@ -34,48 +34,32 @@ export interface TaxStrategy {
 const EMPTY: TaxPayloadPart = { lineTax: [], headerTax: {}, taxItems: [] };
 
 /**
- * SuiteTax — NS modern tax engine. Carries tax details at the record
- * level via `taxdetailsoverride` + a `taxdetailslist` sublist. NS does
- * NOT recalculate when `taxdetailsoverride` is true; the integration is
- * fully responsible for the figures.
+ * SuiteTax — NS modern tax engine.
+ *
+ * Slice D5 policy: do NOT override NS's tax computation. NS computes tax
+ * from the customer's address + the subsidiary's nexus when no override
+ * is provided. Any rounding diff between Shopify's taxLines and NS's
+ * recomputation is absorbed by `applyBalancing` (within tolerance) or
+ * parks the order for review (over tolerance).
+ *
+ * The previous "pass-through" approach (taxDetailsOverride=true with the
+ * Shopify tax title as taxCode) made NS reject the whole salesorder
+ * because NS expects taxCode as an internal id reference and won't
+ * accept arbitrary names. A real implementation needs a `lookup_tax`
+ * table mapping Shopify tax-line titles → NS tax-code internal ids; the
+ * mapping engine's lookup primitive already supports this and the
+ * SuiteTax strategy will switch to override mode once a connection
+ * registers those rows.
  */
 export class SuiteTaxStrategy implements TaxStrategy {
   readonly engine = 'suitetax' as const;
 
-  buildOrderTax(_connection: Connection, order: ShopifyOrder): TaxPayloadPart {
-    if (order.taxLines.length === 0 && order.totalTax.amount === '0.00') {
-      return EMPTY;
-    }
-    const taxdetailslist = order.taxLines.map((t) => ({
-      // taxcode: NS internal id of the tax code. Future: resolve via lookup_tax.
-      // For Slice D, pass the Shopify tax title through as a placeholder so
-      // the payload shape is valid and connections can map it later.
-      taxcode: t.title,
-      taxbasis: t.price.amount,
-      taxamount: t.price.amount,
-      taxrate: t.rate,
-      taxtype: 'OUTPUT',
-    }));
-    return {
-      lineTax: [],
-      headerTax: {
-        taxdetailsoverride: true,
-        taxdetailslist,
-      },
-      taxItems: [],
-    };
+  buildOrderTax(_connection: Connection, _order: ShopifyOrder): TaxPayloadPart {
+    return EMPTY;
   }
 
-  buildShippingTax(_connection: Connection, shippingTax: readonly ShopifyTaxLine[]): TaxPayloadPart {
-    if (shippingTax.length === 0) return EMPTY;
-    const taxdetailslist = shippingTax.map((t) => ({
-      taxcode: t.title,
-      taxbasis: t.price.amount,
-      taxamount: t.price.amount,
-      taxrate: t.rate,
-      taxtype: 'OUTPUT',
-    }));
-    return { lineTax: [], headerTax: { shippingtaxdetailslist: taxdetailslist }, taxItems: [] };
+  buildShippingTax(_connection: Connection, _shippingTax: readonly ShopifyTaxLine[]): TaxPayloadPart {
+    return EMPTY;
   }
 }
 

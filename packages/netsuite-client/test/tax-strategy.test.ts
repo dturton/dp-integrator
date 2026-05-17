@@ -26,37 +26,23 @@ const acmeSuiteTax: Connection = {
 const acmeLegacy: Connection = { ...acmeSuiteTax, taxEngine: 'legacy' };
 
 describe('SuiteTaxStrategy', () => {
-  it('emits taxdetailsoverride + taxdetailslist from order.taxLines', () => {
+  it('returns empty parts (NS recomputes tax from customer address + nexus)', () => {
     const order = makeFakeOrder();
-    const strat = new SuiteTaxStrategy();
-    const part = strat.buildOrderTax(acmeSuiteTax, order);
-    expect(part.headerTax).toMatchObject({ taxdetailsoverride: true });
-    const tdl = part.headerTax['taxdetailslist'] as Array<Record<string, unknown>>;
-    expect(tdl).toHaveLength(1);
-    expect(tdl[0]).toMatchObject({
-      taxcode: 'State Tax',
-      taxbasis: '10.00',
-      taxamount: '10.00',
-      taxrate: 0.1,
-      taxtype: 'OUTPUT',
-    });
-    expect(part.lineTax).toEqual([]);
-    expect(part.taxItems).toEqual([]);
+    const part = new SuiteTaxStrategy().buildOrderTax(acmeSuiteTax, order);
+    expect(part).toEqual({ lineTax: [], headerTax: {}, taxItems: [] });
   });
 
-  it('returns empty parts when the order has no tax', () => {
+  it('returns empty parts for tax-free orders', () => {
     const order = makeFakeOrder({ taxLines: [], totalTax: { amount: '0.00', currencyCode: 'USD' } });
     const part = new SuiteTaxStrategy().buildOrderTax(acmeSuiteTax, order);
     expect(part).toEqual({ lineTax: [], headerTax: {}, taxItems: [] });
   });
 
-  it('builds shipping tax details when shipping has tax lines', () => {
+  it('returns empty parts for shipping tax (delegated to NS)', () => {
     const part = new SuiteTaxStrategy().buildShippingTax(acmeSuiteTax, [
       { title: 'Shipping Tax', rate: 0.05, price: { amount: '0.50', currencyCode: 'USD' } },
     ]);
-    const stdl = part.headerTax['shippingtaxdetailslist'] as Array<Record<string, unknown>>;
-    expect(stdl).toHaveLength(1);
-    expect(stdl[0]).toMatchObject({ taxcode: 'Shipping Tax', taxrate: 0.05 });
+    expect(part).toEqual({ lineTax: [], headerTax: {}, taxItems: [] });
   });
 });
 
