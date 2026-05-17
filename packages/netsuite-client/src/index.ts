@@ -18,3 +18,20 @@ export {
   type TaxPayloadPart,
   type TaxStrategy,
 } from './tax-strategy.js';
+export {
+  buildOrderPayload,
+  netsuiteOrderRecordType,
+  type BuildOrderPayloadArgs,
+  type NsOrderPayload,
+} from './payload-builder.js';
+export {
+  buildDefaultLineItemsMap,
+  buildDefaultOrderHeaderMap,
+  buildDefaultShippingMap,
+} from './default-order-map.js';
+export {
+  defaultDeriveRegistry,
+  parseShopifyDate,
+  shopifyLineToItemLine,
+  shopifyShippingToLine,
+} from './derive-fns.js';

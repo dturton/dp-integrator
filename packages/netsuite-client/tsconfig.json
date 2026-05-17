@@ -6,5 +6,9 @@
   },
   "include": ["src/**/*.ts"],
   "exclude": ["**/*.test.ts", "test/**", "dist", "node_modules"],
-  "references": [{ "path": "../core" }, { "path": "../shopify-client" }]
+  "references": [
+    { "path": "../core" },
+    { "path": "../shopify-client" },
+    { "path": "../mapping-engine" }
+  ]
 }
