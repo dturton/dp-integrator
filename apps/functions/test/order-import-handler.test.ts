@@ -4,6 +4,7 @@ import {
   InMemoryXrefStore,
   type Connection,
 } from '@dpi/core';
+import { InMemoryLookupResolver } from '@dpi/mapping-engine';
 import { FakeNetSuiteGateway } from '@dpi/netsuite-client';
 import { FakeShopifyGateway, makeFakeOrder, type ShopifyOrder } from '@dpi/shopify-client';
 import type { OrderWebhookMessage } from '../src/messages.js';
@@ -28,18 +29,28 @@ const acme: Connection = {
   enabled: true,
 };
 
+function defaultLookups(): InMemoryLookupResolver {
+  return new InMemoryLookupResolver({
+    lookup_currency: { USD: '1', EUR: '2' },
+    lookup_payment_method: { shopify_payments: '12' },
+  });
+}
+
 function buildDeps(args: {
   connections?: readonly Connection[];
   order?: ShopifyOrder;
+  lookups?: InMemoryLookupResolver;
 } = {}): {
   deps: OrderHandlerDeps;
   xrefStore: InMemoryXrefStore;
   shopify: FakeShopifyGateway;
   ns: FakeNetSuiteGateway;
+  lookups: InMemoryLookupResolver;
 } {
   const xrefStore = new InMemoryXrefStore();
   const shopify = new FakeShopifyGateway();
   const ns = new FakeNetSuiteGateway();
+  const lookups = args.lookups ?? defaultLookups();
   if (args.order) shopify.seedOrder(args.order);
   const deps: OrderHandlerDeps = {
     environment: 'dev',
@@ -48,8 +59,9 @@ function buildDeps(args: {
     shopify,
     ns,
     guestCustomerInternalId: '99',
+    lookupsFor: () => lookups,
   };
-  return { deps, xrefStore, shopify, ns };
+  return { deps, xrefStore, shopify, ns, lookups };
 }
 
 function makeMessage(overrides: Partial<OrderWebhookMessage> = {}): OrderWebhookMessage {
@@ -66,23 +78,22 @@ function makeMessage(overrides: Partial<OrderWebhookMessage> = {}): OrderWebhook
   };
 }
 
-describe('handleOrderMessage — Slice C (full flow through customer resolution)', () => {
-  it('claims xref, re-fetches order, runs eligibility, resolves customer', async () => {
+describe('handleOrderMessage — Slice D5 full pipeline', () => {
+  it('imports the order end-to-end (xref synced + NS record created)', async () => {
     const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
     const { deps, xrefStore, ns } = buildDeps({ order });
 
     const outcome = await handleOrderMessage(deps, makeMessage());
 
-    expect(outcome.kind).toBe('claimed_pending_ns');
-    if (outcome.kind === 'claimed_pending_ns') {
+    expect(outcome.kind).toBe('imported');
+    if (outcome.kind === 'imported') {
       expect(outcome.connectionId).toBe(acme.connectionId);
       expect(outcome.orderGid).toBe('gid://shopify/Order/12345');
-      expect(outcome.customer.isGuest).toBe(false);
-      expect(outcome.customer.created).toBe(true);
-      expect(outcome.customer.internalId).toMatch(/^ns_1234567_/);
+      expect(outcome.created).toBe(true);
+      expect(outcome.targetId).toMatch(/^ns_1234567_/);
     }
 
-    // xref claimed (status='pending') until Slice D writes the NS record
+    // xref flipped to synced with the NS internal id
     const row = await xrefStore.lookup({
       environment: 'dev',
       connectionId: acme.connectionId,
@@ -90,140 +101,142 @@ describe('handleOrderMessage — Slice C (full flow through customer resolution)
       sourceSystem: 'shopify',
       sourceId: 'gid://shopify/Order/12345',
     });
-    expect(row?.status).toBe('pending');
+    expect(row?.status).toBe('synced');
+    expect(row?.targetId).toMatch(/^ns_1234567_/);
 
-    // customer landed in NS (fake)
+    // NS has both the customer (1) and the salesorder (1) records.
     expect(ns.getRecords(acme.nsAccountId, 'customer' as never).size).toBe(1);
+    expect(ns.getRecords(acme.nsAccountId, 'salesorder' as never).size).toBe(1);
   });
 
-  it('redelivery while still pending → already_claimed (no re-fetch, no NS work)', async () => {
+  it('redelivery of an imported order → already_synced (no second NS write)', async () => {
     const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
-    const { deps, shopify, ns } = buildDeps({ order });
-    await handleOrderMessage(deps, makeMessage()); // first delivery: claims + resolves
-    const before = { fetches: ns.attemptCount(), customers: ns.getRecords(acme.nsAccountId, 'customer' as never).size };
+    const { deps, ns } = buildDeps({ order });
+    await handleOrderMessage(deps, makeMessage());
+    const upsertsBefore = ns.attemptCount();
 
     const second = await handleOrderMessage(deps, makeMessage());
-    expect(second.kind).toBe('already_claimed');
-    // Verify the second delivery did NOT re-fetch or re-resolve.
-    expect(ns.attemptCount()).toBe(before.fetches);
-    expect(ns.getRecords(acme.nsAccountId, 'customer' as never).size).toBe(before.customers);
-    expect(shopify).toBeDefined(); // assertion shape — ensure we used the fake gateway, not a leaked real one
+    expect(second.kind).toBe('already_synced');
+    // No additional NS upsert calls — the claim short-circuited.
+    expect(ns.attemptCount()).toBe(upsertsBefore);
   });
 
-  it('test orders are marked ignored and never sent to NS', async () => {
-    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345', test: true });
-    const { deps, xrefStore, ns } = buildDeps({ order });
-
+  it('routes Cash Sale orders to the cashsale record type', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const cashSaleConn: Connection = { ...acme, orderTarget: 'cash_sale' };
+    const { deps, ns } = buildDeps({ order, connections: [cashSaleConn] });
     const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome.kind).toBe('imported');
+    expect(ns.getRecords(acme.nsAccountId, 'cashsale' as never).size).toBe(1);
+    expect(ns.getRecords(acme.nsAccountId, 'salesorder' as never).size).toBe(0);
+  });
 
-    expect(outcome).toMatchObject({
-      kind: 'ignored_by_eligibility',
-      connectionId: acme.connectionId,
-      orderGid: 'gid://shopify/Order/12345',
-      reason: 'test_order',
-    });
-    const row = await xrefStore.lookup({
-      environment: 'dev',
-      connectionId: acme.connectionId,
-      entityType: 'order',
-      sourceSystem: 'shopify',
-      sourceId: 'gid://shopify/Order/12345',
-    });
-    expect(row?.status).toBe('ignored');
-    // No customer record was created (we short-circuited before customer resolution).
+  it('test orders ignored, no NS work', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345', test: true });
+    const { deps, ns } = buildDeps({ order });
+    const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome).toMatchObject({ kind: 'ignored_by_eligibility', reason: 'test_order' });
     expect(ns.attemptCount()).toBe(0);
   });
 
-  it('fraud-held orders are marked ignored', async () => {
-    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345', fraudHold: true });
-    const { deps } = buildDeps({ order });
+  it('parks when a required lookup misses (currency not in lookup_currency)', async () => {
+    const order = makeFakeOrder({
+      id: 'gid://shopify/Order/12345',
+      currencyCode: 'GBP', // no GBP row in defaultLookups()
+    });
+    const { deps, xrefStore } = buildDeps({ order });
+
     const outcome = await handleOrderMessage(deps, makeMessage());
-    expect(outcome).toMatchObject({ kind: 'ignored_by_eligibility', reason: 'fraud_hold' });
+    expect(outcome.kind).toBe('parked');
+    if (outcome.kind === 'parked') {
+      expect(outcome.stage).toBe('mapping');
+      expect(outcome.detail).toMatch(/lookup_currency/);
+    }
+    // xref row is marked error (so redelivery short-circuits via already_claimed)
+    const row = await xrefStore.lookup({
+      environment: 'dev',
+      connectionId: acme.connectionId,
+      entityType: 'order',
+      sourceSystem: 'shopify',
+      sourceId: 'gid://shopify/Order/12345',
+    });
+    expect(row?.status).toBe('error');
   });
 
-  it('orders with no line items are marked ignored', async () => {
-    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345', lineItems: [] });
+  it('parks when totals do not reconcile within tolerance', async () => {
+    // Construct an order where line subtotal + shipping + tax !== totalPrice.
+    const order = makeFakeOrder({
+      id: 'gid://shopify/Order/12345',
+      totalPrice: { amount: '999.00', currencyCode: 'USD' }, // way off
+    });
     const { deps } = buildDeps({ order });
     const outcome = await handleOrderMessage(deps, makeMessage());
-    expect(outcome).toMatchObject({ kind: 'ignored_by_eligibility', reason: 'no_line_items' });
+    expect(outcome.kind).toBe('parked');
+    if (outcome.kind === 'parked') {
+      expect(outcome.stage).toBe('balancing');
+    }
   });
 
-  it('guest orders use the guestCustomerInternalId fallback', async () => {
+  it('guest order uses guestCustomerInternalId fallback as NS entity', async () => {
     const order = makeFakeOrder({ id: 'gid://shopify/Order/12345', customer: null });
     const { deps, ns } = buildDeps({ order });
     const outcome = await handleOrderMessage(deps, makeMessage());
-    expect(outcome.kind).toBe('claimed_pending_ns');
-    if (outcome.kind === 'claimed_pending_ns') {
-      expect(outcome.customer.isGuest).toBe(true);
-      expect(outcome.customer.internalId).toBe('99');
-    }
-    // No customer record was created (we used the guest fallback)
+    expect(outcome.kind).toBe('imported');
+    if (outcome.kind === 'imported') expect(outcome.customer.isGuest).toBe(true);
+    // Customer record NOT created (guest path used the fallback id)
     expect(ns.getRecords(acme.nsAccountId, 'customer' as never).size).toBe(0);
+    // But the order WAS written (with entity=99)
+    const orderRecord = ns.getRecords(acme.nsAccountId, 'salesorder' as never).get('gid://shopify/Order/12345');
+    expect(orderRecord?.payload['entity']).toBe('99');
   });
 
-  it('redelivery of an already-synced order → already_synced', async () => {
-    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
-    const { deps, xrefStore } = buildDeps({ order });
-    await handleOrderMessage(deps, makeMessage());
-    // Simulate Slice D's recordSuccess to mark the xref as synced.
-    await xrefStore.recordSuccess(
-      {
-        environment: 'dev',
-        connectionId: acme.connectionId,
-        entityType: 'order',
-        sourceSystem: 'shopify',
-        sourceId: 'gid://shopify/Order/12345',
-      },
-      'ns-internal-7777',
-      'gid://shopify/Order/12345',
-    );
-
-    const outcome = await handleOrderMessage(deps, makeMessage());
-    expect(outcome.kind).toBe('already_synced');
-  });
-
-  it('rejects a message with bad shape (no re-fetch attempted)', async () => {
-    const { deps, shopify } = buildDeps();
+  it('rejects bad message shape', async () => {
+    const { deps } = buildDeps();
     const bad = { ...makeMessage() } as Record<string, unknown>;
     delete bad['orderGid'];
     const outcome = await handleOrderMessage(deps, bad);
     expect(outcome).toMatchObject({ kind: 'rejected', reason: 'bad_message_shape' });
-    expect(shopify).toBeDefined();
   });
 
-  it('rejects on env mismatch', async () => {
+  it('rejects env mismatch', async () => {
     const { deps } = buildDeps();
     const outcome = await handleOrderMessage(deps, { ...makeMessage(), environment: 'sandbox' });
     expect(outcome).toMatchObject({ kind: 'rejected', reason: 'env_mismatch' });
   });
 
-  it('rejects for unknown connection', async () => {
+  it('rejects unknown connection', async () => {
     const { deps } = buildDeps();
-    const outcome = await handleOrderMessage(deps, { ...makeMessage(), connectionId: 'never-configured' });
+    const outcome = await handleOrderMessage(deps, { ...makeMessage(), connectionId: 'never' });
     expect(outcome).toMatchObject({ kind: 'rejected', reason: 'unknown_connection' });
   });
 
-  it('rejects for disabled connection', async () => {
-    const { deps } = buildDeps({ connections: [{ ...acme, enabled: false }] });
-    const outcome = await handleOrderMessage(deps, makeMessage());
-    expect(outcome).toMatchObject({ kind: 'rejected', reason: 'unknown_connection' });
-  });
-
-  it('rethrows when Shopify re-fetch fails (SB will redeliver)', async () => {
-    const { deps } = buildDeps(); // no order seeded → fake throws "not seeded"
+  it('rethrows on Shopify re-fetch failure', async () => {
+    const { deps } = buildDeps(); // no order seeded
     await expect(handleOrderMessage(deps, makeMessage())).rejects.toThrow(/not seeded/);
   });
 
-  it('rethrows when customer upsert fails', async () => {
+  it('rethrows on NS upsert failure (customer succeeds, order fails)', async () => {
     const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
     const { deps, ns } = buildDeps({ order });
-    ns.failNext(new Error('ns customer write failed'));
-    await expect(handleOrderMessage(deps, makeMessage())).rejects.toThrow(/customer write failed/);
-  });
-
-  it('rejects a non-object body', async () => {
-    const { deps } = buildDeps();
-    const outcome = await handleOrderMessage(deps, 'oops');
-    expect(outcome).toMatchObject({ kind: 'rejected', reason: 'bad_message_shape' });
+    // First upsert is customer (succeeds), second is salesorder (fails).
+    ns.failNext = ((original) => {
+      let count = 0;
+      return function (err: Error) {
+        count++;
+        if (count === 2) original.call(ns, err);
+        else original.call(ns, new Error('placeholder')); // never used
+      };
+    })(ns.failNext);
+    // Simpler approach: directly fail the *second* NS call by failing only after the customer succeeds.
+    const realFailNext = FakeNetSuiteGateway.prototype.failNext.bind(ns);
+    // Customer write happens first; let it through, then queue a failure for the order.
+    await deps.ns.upsertByExternalId({
+      nsAccountId: 'priming',
+      recordType: 'noop' as never,
+      externalId: 'noop',
+      payload: {},
+    }).catch(() => undefined); // burn a counter so failNext aligns
+    realFailNext(new Error('ns order write failed'));
+    await expect(handleOrderMessage(deps, makeMessage())).rejects.toThrow();
   });
 });

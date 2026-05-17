@@ -5,10 +5,21 @@ import {
 import type {
   Connection,
   ConnectionsRepo,
+  DedupKeyParts,
   Environment,
   XrefStore,
 } from '@dpi/core';
-import type { NetSuiteGateway } from '@dpi/netsuite-client';
+import type { LookupResolver, MapDeriveRegistry } from '@dpi/mapping-engine';
+import {
+  applyBalancing,
+  applyTaxPayloadHeader,
+  buildOrderPayload,
+  defaultDeriveRegistry,
+  netsuiteOrderRecordType,
+  strategyFor,
+  type NetSuiteGateway,
+  type NsOrderPayload,
+} from '@dpi/netsuite-client';
 import type { ShopifyGateway, ShopifyOrder } from '@dpi/shopify-client';
 import { checkEligibility, type EligibilityReason } from '@dpi/mapping-engine';
 import {
@@ -18,22 +29,31 @@ import {
 import type { OrderWebhookMessage } from '../messages.js';
 
 /**
- * M1 order-import handler. Per slice:
- *   - Slice B (shipped): xref-claim idempotency over Service Bus session
- *     trigger; stub everything past claim.
- *   - Slice C (this slice): re-fetch order from Shopify (brief invariant 3),
- *     run eligibility, resolve customer. NS write still deferred.
- *   - Slice D: build NS order payload (mapping engine + tax strategy +
- *     balancing line) and call NetSuiteGateway.upsertByExternalId, then
- *     xrefStore.recordSuccess.
+ * M1 order-import handler. Slice D5 wires the full pipeline:
  *
- * Behavior on errors:
- *   - Re-fetch / customer-resolve errors are RE-THROWN so the Service Bus
- *     host returns the message to the subscription for retry (up to
- *     maxDeliveryCount = 10, then dead-letter). The xref row stays `pending`
- *     between retries; redeliveries see `already_claimed` and short-circuit.
- *     M2 adds proper error_records routing + admin replay; for now, DLQ is
- *     the failure escape valve.
+ *   1. Parse + validate message envelope
+ *   2. Resolve connection (reject env mismatch / unknown / disabled)
+ *   3. xrefStore.claim — brief invariant 1 idempotency
+ *      → already_synced / already_claimed / ignored: short-circuit
+ *      → claimed: proceed
+ *   4. shopify.getOrder — brief invariant 3 re-fetch
+ *   5. checkEligibility — test/fraud/voided/pending/no-lines → markIgnored
+ *   6. resolveCustomer — match or create on NS
+ *   7. buildOrderPayload — mapping-engine evaluator + line-item / shipping
+ *      derives (Slice D1). On park → recordFailure + outcome 'parked'.
+ *   8. tax strategy (Slice D2): apply header tax fields to the payload
+ *   9. applyBalancing (Slice D3) — ensure NS total reconciles to Shopify
+ *      total within tolerance. On over-tolerance park → recordFailure +
+ *      outcome 'parked'.
+ *   10. ns.upsertByExternalId — write the SO / Cash Sale to NS keyed on the
+ *       Shopify order GID. Idempotent on NS's side.
+ *   11. xrefStore.recordSuccess — flip the row to status='synced' with the
+ *       NS internal id.
+ *
+ * Throws from any I/O (Shopify, NS, Postgres) cause SB to redeliver up to
+ * maxDeliveryCount=10, then DLQ. Redeliveries short-circuit on the claim
+ * via 'already_claimed' (pending) or 'already_synced' (if recordSuccess
+ * landed before the retry).
  */
 
 export interface OrderHandlerDeps {
@@ -42,12 +62,16 @@ export interface OrderHandlerDeps {
   readonly xrefStore: XrefStore;
   readonly shopify: ShopifyGateway;
   readonly ns: NetSuiteGateway;
-  /** NS internal id used when a Shopify order has no customer (guest checkout). */
   readonly guestCustomerInternalId: string;
+  /** Per-handler lookups resolver (mapping engine). In prod: PostgresLookupResolver bound to the connection. */
+  readonly lookupsFor: (connection: Connection) => LookupResolver;
+  /** Optional derive registry override (defaults to the netsuite-client default). */
+  readonly derives?: MapDeriveRegistry;
 }
 
 export type OrderHandlerOutcome =
-  | { readonly kind: 'claimed_pending_ns'; readonly connectionId: string; readonly orderGid: string; readonly customer: CustomerResolution }
+  | { readonly kind: 'imported'; readonly connectionId: string; readonly orderGid: string; readonly targetId: string; readonly created: boolean; readonly customer: CustomerResolution }
+  | { readonly kind: 'parked'; readonly connectionId: string; readonly orderGid: string; readonly stage: 'mapping' | 'balancing'; readonly detail: string }
   | { readonly kind: 'ignored_by_eligibility'; readonly connectionId: string; readonly orderGid: string; readonly reason: EligibilityReason; readonly detail?: string }
   | { readonly kind: 'already_synced'; readonly connectionId: string; readonly orderGid: string }
   | { readonly kind: 'already_claimed'; readonly connectionId: string; readonly orderGid: string }
@@ -58,7 +82,7 @@ export async function handleOrderMessage(
   deps: OrderHandlerDeps,
   message: unknown,
 ): Promise<OrderHandlerOutcome> {
-  // 1. Parse + validate the message envelope.
+  // 1. Parse + validate
   const parsed = parseOrderWebhookMessage(message);
   if (!parsed.ok) return { kind: 'rejected', reason: 'bad_message_shape', detail: parsed.error };
   const msg = parsed.value;
@@ -75,13 +99,12 @@ export async function handleOrderMessage(
     return { kind: 'rejected', reason: 'unknown_connection', detail: `connectionId=${msg.connectionId}` };
   }
 
-  // 2. Idempotency claim (brief invariant 1). PostgresXrefStore PK serializes
-  // concurrent claims across instances — exactly one wins per dedup key.
-  const dedupKey = {
+  // 2. Idempotency claim
+  const dedupKey: DedupKeyParts = {
     environment: msg.environment,
     connectionId: connection.connectionId,
-    entityType: 'order' as const,
-    sourceSystem: 'shopify' as const,
+    entityType: 'order',
+    sourceSystem: 'shopify',
     sourceId: msg.orderGid,
   };
   const claim = await deps.xrefStore.claim({
@@ -101,11 +124,10 @@ export async function handleOrderMessage(
   }
   // claim.outcome === 'claimed' — proceed.
 
-  // 3. Re-fetch authoritative order from Shopify (brief invariant 3 —
-  // never trust the webhook body for downstream mapping).
+  // 3. Re-fetch authoritative order
   const order: ShopifyOrder = await deps.shopify.getOrder(connection, msg.orderGid);
 
-  // 4. Eligibility predicate. Ineligible → mark ignored + ack.
+  // 4. Eligibility predicate
   const elig = checkEligibility(order, msg.topic);
   if (!elig.eligible) {
     await deps.xrefStore.markIgnored(dedupKey);
@@ -118,7 +140,7 @@ export async function handleOrderMessage(
     };
   }
 
-  // 5. Resolve customer (match-or-create on NS).
+  // 5. Customer match/create
   const customer = await resolveCustomer(
     { ns: deps.ns },
     connection,
@@ -126,16 +148,66 @@ export async function handleOrderMessage(
     { guestCustomerInternalId: deps.guestCustomerInternalId },
   );
 
-  // Slice D will:
-  //   - map the order via the mapping engine + tax strategy + balancing line
-  //   - call deps.ns.upsertByExternalId for the SO / Cash Sale record
-  //   - deps.xrefStore.recordSuccess(dedupKey, targetId, msg.orderGid)
-  // For Slice C, we stop here. The xref row stays `pending` until Slice D
-  // ships — redeliveries are no-ops via the already_claimed branch above.
+  // 6. Build NS payload (mapping engine + derives)
+  const lookups = deps.lookupsFor(connection);
+  const payloadResult = await buildOrderPayload({
+    connection,
+    order,
+    customerInternalId: customer.internalId,
+    lookups,
+    ...(deps.derives ? { derives: deps.derives } : { derives: defaultDeriveRegistry() }),
+  });
+  if (!payloadResult.ok) {
+    await deps.xrefStore.recordFailure(dedupKey);
+    return {
+      kind: 'parked',
+      connectionId: connection.connectionId,
+      orderGid: msg.orderGid,
+      stage: 'mapping',
+      detail: payloadResult.parked.detail,
+    };
+  }
+  const draft: NsOrderPayload = payloadResult.payload;
+
+  // 7. Tax strategy → apply header tax fields to the draft payload
+  const tax = strategyFor(connection).buildOrderTax(connection, order);
+  // Note: we apply tax onto a *copy* so the draft object isn't mutated in
+  // place — keeps the payload-builder output reusable across retries / tests.
+  const taxApplied: NsOrderPayload = { ...draft };
+  applyTaxPayloadHeader(taxApplied as Record<string, unknown>, tax);
+
+  // 8. Balancing line
+  const balanced = applyBalancing(taxApplied, order);
+  if (!balanced.ok) {
+    await deps.xrefStore.recordFailure(dedupKey);
+    return {
+      kind: 'parked',
+      connectionId: connection.connectionId,
+      orderGid: msg.orderGid,
+      stage: 'balancing',
+      detail: balanced.parked.detail,
+    };
+  }
+  const finalPayload = balanced.payload.payload;
+
+  // 9. NS upsert keyed on Shopify order GID
+  const recordType = netsuiteOrderRecordType(connection);
+  const upserted = await deps.ns.upsertByExternalId({
+    nsAccountId: connection.nsAccountId,
+    recordType: recordType as Parameters<NetSuiteGateway['upsertByExternalId']>[0]['recordType'],
+    externalId: msg.orderGid,
+    payload: finalPayload as Record<string, unknown>,
+  });
+
+  // 10. recordSuccess → xref status = 'synced' with the NS internal id
+  await deps.xrefStore.recordSuccess(dedupKey, upserted.internalId, msg.orderGid);
+
   return {
-    kind: 'claimed_pending_ns',
+    kind: 'imported',
     connectionId: connection.connectionId,
     orderGid: msg.orderGid,
+    targetId: upserted.internalId,
+    created: upserted.created,
     customer,
   };
 }
@@ -161,11 +233,6 @@ function parseOrderWebhookMessage(raw: unknown): ParseSuccess | ParseFailure {
   return { ok: true, value: m as unknown as OrderWebhookMessage };
 }
 
-// Verifies our Connection type isn't unused (TS would prune the import otherwise).
-export function _connectionShapeCheck(c: Connection): string {
-  return c.connectionId;
-}
-
 export function registerOrderImportHandler(getDeps: () => OrderHandlerDeps): void {
   app.serviceBusTopic('shopifyOrderHandler', {
     topicName: 'orders-in',
@@ -186,12 +253,14 @@ export function registerOrderImportHandler(getDeps: () => OrderHandlerDeps): voi
 
 function describeOutcome(o: OrderHandlerOutcome): string {
   switch (o.kind) {
-    case 'rejected':
-      return `reason=${o.reason} detail="${o.detail}"`;
+    case 'imported':
+      return `connection=${o.connectionId} order=${o.orderGid} ns=${o.targetId} created=${o.created} customer=${o.customer.internalId}`;
+    case 'parked':
+      return `connection=${o.connectionId} order=${o.orderGid} stage=${o.stage} detail="${o.detail}"`;
     case 'ignored_by_eligibility':
       return `connection=${o.connectionId} order=${o.orderGid} reason=${o.reason}${o.detail ? ` detail="${o.detail}"` : ''}`;
-    case 'claimed_pending_ns':
-      return `connection=${o.connectionId} order=${o.orderGid} customer=${o.customer.internalId} guest=${o.customer.isGuest}`;
+    case 'rejected':
+      return `reason=${o.reason} detail="${o.detail}"`;
     default:
       return `connection=${o.connectionId} order=${o.orderGid}`;
   }

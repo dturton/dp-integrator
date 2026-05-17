@@ -10,20 +10,27 @@
  * adds the catch-up poller (timer) and reconciliation sweep.
  */
 import { getAppContext } from './bootstrap.js';
+import { PostgresLookupResolver } from './adapters/index.js';
 import { registerOrderImportHandler } from './triggers/order-import-handler.js';
 import { registerShopifyWebhook } from './triggers/shopify-webhook.js';
 
 registerShopifyWebhook(() => getAppContext());
 
-// Slice B+: drain the Service Bus topic into the order handler.
-// Slice C adds shopify gateway + ns gateway + guestCustomerInternalId so the
-// handler can re-fetch, eligibility-check, and resolve customers.
+// Slice D5: full pipeline. The handler claims xref, re-fetches the order,
+// runs eligibility, resolves customer, builds the NS payload via the mapping
+// engine, applies tax + balancing, calls ns.upsertByExternalId, and records
+// success. PostgresLookupResolver is constructed per-connection on demand so
+// the same pg.Pool services multiple tenants.
 registerOrderImportHandler(() => {
   const ctx = getAppContext();
   if (!ctx.xrefStore) {
     throw new Error(
       'order-import handler invoked but bootstrap has no XrefStore — POSTGRES_HOST / POSTGRES_DATABASE / POSTGRES_MI_USER (or WEBSITE_SITE_NAME) not set',
     );
+  }
+  const pool = ctx.pgPool;
+  if (!pool) {
+    throw new Error('order-import handler invoked but bootstrap has no pgPool');
   }
   return {
     environment: ctx.environment,
@@ -32,5 +39,6 @@ registerOrderImportHandler(() => {
     shopify: ctx.shopify,
     ns: ctx.ns,
     guestCustomerInternalId: ctx.guestCustomerInternalId,
+    lookupsFor: (connection) => new PostgresLookupResolver(pool, connection),
   };
 });

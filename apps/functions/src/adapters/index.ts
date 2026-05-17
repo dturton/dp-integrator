@@ -8,3 +8,7 @@ export {
 } from './blob-envelope-store.js';
 export { buildPgPool, type PgPoolConfig } from './pg-pool.js';
 export { PostgresXrefStore } from './postgres-xref-store.js';
+export {
+  PostgresLookupResolver,
+  type PostgresLookupResolverOptions,
+} from './postgres-lookup-resolver.js';
