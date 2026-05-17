@@ -11,6 +11,7 @@ export {
 export type { NetSuiteGateway, UpsertResult } from './gateway.js';
 export { SdkNetSuiteGateway } from './sdk-gateway.js';
 export { FakeNetSuiteGateway } from './fake-gateway.js';
+export { shopifyGidToNsExternalId } from './external-id.js';
 export {
   applyTaxPayloadHeader,
   LegacyTaxStrategy,

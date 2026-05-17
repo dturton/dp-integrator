@@ -1,32 +1,36 @@
 import { suiteql, type RecordType } from 'netsuite-sdk';
 import type { NetSuiteClientFactory, NsAccountConfig } from './client-factory.js';
+import { shopifyGidToNsExternalId } from './external-id.js';
 import type { NetSuiteGateway, UpsertResult } from './gateway.js';
 
 /**
- * Real `NetSuiteGateway` backed by `netsuite-sdk`. Resolves the per-account
- * SDK client via the factory, then dispatches the SDK's `records.upsert` /
- * SuiteQL paths.
+ * Real `NetSuiteGateway` backed by `netsuite-sdk`.
  *
- * The factory is the ONLY place that imports `NetSuiteClient`; everything
- * downstream sees `NetSuiteGateway`.
+ * URL construction note: we DO NOT use `client.records.upsert(...)` because
+ * the SDK at 0.1.33 builds the URL as
+ *   /record/v1/<type>/eid:<externalIdField>=<value>
+ * but the NS REST API expects just
+ *   /record/v1/<type>/eid:<value>
+ * The extra `<externalIdField>=` segment makes the URL OAuth-signature
+ * mismatch NS's parsed form and NS responds with a generic
+ * `401 INVALID_LOGIN`. We bypass the SDK helper and call
+ * `client.transport.request` directly with the canonical URL.
  *
- * Internal-id extraction: NS REST returns 204 No Content on both successful
- * create and update via the `eid:` (external-id) upsert path. The created or
- * updated record's internal id lives in the `Location` response header:
- *   Location: https://<acct>.suitetalk.api.netsuite.com/services/rest/record/v1/<recordType>/<internalId>
- * We parse the last URL segment. Some older NS API versions return 200/201
- * with `{ id }` in the body — handled as a fallback.
+ * External-id translation: Shopify GIDs (`gid://shopify/Order/12345`) contain
+ * `:` and `/` which NS won't accept in external IDs (URL parse failures
+ * also surface as `INVALID_LOGIN`). `shopifyGidToNsExternalId()` produces a
+ * URL-safe deterministic form like `shopify-order-12345`. The xref table
+ * still carries the original GID, so the brief's idempotency invariant is
+ * preserved: same Shopify entity → same NS externalId every call.
  *
- * `created` vs updated: NS doesn't reliably distinguish via status (both 204).
- * We set `created` from the body's HTTP status (201 only) for now; in the
- * common 204 case it'll be `false` either way. The caller should treat this
- * as a hint, not a guarantee.
+ * Internal-id extraction: NS REST returns 204 No Content with the new/updated
+ * record's URL in the `Location` header for `eid:` upserts. Older paths put
+ * `{ id }` in the body — `extractInternalId()` handles both.
+ *
+ * `created` flag is best-effort: NS uses 204 for both create and update via
+ * `eid:`, so this is `false` in the common case. Caller treats as a hint.
  */
 export class SdkNetSuiteGateway implements NetSuiteGateway {
-  /**
-   * `accounts` maps `nsAccountId → NsAccountConfig`. Hydrated from the
-   * `connections` table in production; passed in by tests.
-   */
   constructor(
     private readonly factory: NetSuiteClientFactory,
     private readonly accounts: ReadonlyMap<string, NsAccountConfig>,
@@ -46,12 +50,17 @@ export class SdkNetSuiteGateway implements NetSuiteGateway {
   }): Promise<UpsertResult> {
     const account = this.resolveAccount(args.nsAccountId);
     const client = await this.factory.get(account);
-    const response = (await client.records.upsert(
-      args.recordType,
-      'externalId',
-      args.externalId,
-      args.payload,
-    )) as { status: number; headers?: Record<string, string>; body?: unknown };
+    const nsExternalId = shopifyGidToNsExternalId(args.externalId);
+
+    const normalizedAccount = args.nsAccountId.toLowerCase().replace(/_/g, '-');
+    const url =
+      `https://${normalizedAccount}.suitetalk.api.netsuite.com` +
+      `/services/rest/record/v1/${args.recordType}/eid:${nsExternalId}`;
+
+    const response = await transportOf(client).request(url, {
+      method: 'PUT',
+      body: args.payload,
+    });
 
     const internalId = extractInternalId(response);
     if (!internalId) {
@@ -62,6 +71,8 @@ export class SdkNetSuiteGateway implements NetSuiteGateway {
     }
     return {
       internalId,
+      // Original GID kept on the caller-facing result so xref bookkeeping
+      // stays unchanged (recordSuccess wires xref.target_external to this).
       externalId: args.externalId,
       created: response.status === 201,
     };
@@ -76,23 +87,39 @@ export class SdkNetSuiteGateway implements NetSuiteGateway {
     const account = this.resolveAccount(args.nsAccountId);
     const client = await this.factory.get(account);
     const cols = args.fields?.length ? args.fields : (['id', 'externalid'] as const);
+    // SuiteQL queries the stored value, which is the URL-safe transformed
+    // form (because every write goes through shopifyGidToNsExternalId above).
+    const nsExternalId = shopifyGidToNsExternalId(args.externalId);
 
-    // SuiteQL table names mirror the REST record type (lowercase).
     const sql = suiteql()
       .select(...cols)
       .from(args.recordType.toLowerCase())
-      .whereEquals('externalid', args.externalId)
+      .whereEquals('externalid', nsExternalId)
       .build();
 
     return client.suiteql.queryOne<Record<string, unknown>>(sql);
   }
 }
 
+interface SdkTransport {
+  request(
+    url: string,
+    options: { method: string; body?: unknown },
+  ): Promise<{ status: number; headers?: Record<string, string>; body?: unknown }>;
+}
+
+function transportOf(client: unknown): SdkTransport {
+  const t = (client as { transport?: SdkTransport }).transport;
+  if (!t || typeof t.request !== 'function') {
+    throw new Error('SdkNetSuiteGateway: NetSuiteClient.transport is missing the request method');
+  }
+  return t;
+}
+
 function extractInternalId(response: {
   body?: unknown;
   headers?: Record<string, string>;
 }): string | undefined {
-  // Older NS / non-upsert paths put the id in the body.
   if (response.body && typeof response.body === 'object') {
     const id = (response.body as { id?: string | number }).id;
     if (id !== undefined && id !== null) return String(id);
