@@ -5,13 +5,19 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "dpi-admin": "dist/cli.js"
+    "dpi": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
-    "typecheck": "tsc -b tsconfig.json --noEmit"
+    "typecheck": "tsc -b tsconfig.json --noEmit",
+    "dpi": "node dist/cli.js"
   },
   "dependencies": {
-    "@dpi/core": "workspace:*"
+    "@azure/identity": "^4.4.1",
+    "@dpi/core": "workspace:*",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10"
   }
 }

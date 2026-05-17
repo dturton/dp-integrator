@@ -126,6 +126,43 @@ For each connection in `DPI_CONNECTIONS_JSON`:
   / `order-import` subscription (will sit there until Slice B's handler runs).
 - Shopify admin → webhook log shows 200s.
 
+## Ops CLI (`dpi`)
+
+A terminal-only status board for the integration. Run from your machine
+against any deployed environment.
+
+```bash
+# One-time: build the workspace
+pnpm install && pnpm build
+
+# Set environment for the CLI. Add these to ~/.zshrc / ~/.bashrc to make
+# them sticky. Your Entra principal must already be a Postgres admin
+# (granted in Slice B1).
+export DPI_PG_HOST="dpi-pg-dev-<suffix>.postgres.database.azure.com"
+export DPI_PG_DATABASE="dpi_dev"
+export DPI_PG_USER="you@yourorg.com"
+export DPI_AI_APP_ID="<app-insights-component-appId>"
+export DPI_ENVIRONMENT="dev"
+
+# One-screen overview: backlog counts + recent xref activity + last-hour
+# handler outcomes.
+node apps/admin/dist/cli.js status
+
+# Parked rows (xref status='error') with the most recent park reason
+# pulled from App Insights logs.
+node apps/admin/dist/cli.js parked --limit 30
+```
+
+To retry a parked row after fixing the underlying issue:
+
+```sql
+DELETE FROM entity_xref WHERE source_id = 'gid://shopify/Order/<id>';
+```
+
+Then redeliver the webhook (Shopify admin → webhook log → resend, or `curl`
+with a signed body). M2 will add a `dpi replay <gid>` verb that does both
+atomically.
+
 ## Working with the NetSuite SDK
 
 This monorepo depends on the first-party `netsuite-sdk` package (pinned). It is the **only** package

@@ -23,9 +23,19 @@ importers:
 
   apps/admin:
     dependencies:
+      '@azure/identity':
+        specifier: ^4.4.1
+        version: 4.13.1
       '@dpi/core':
         specifier: workspace:*
         version: link:../../packages/core
+      pg:
+        specifier: ^8.13.1
+        version: 8.20.0
+    devDependencies:
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.20.0
 
   apps/functions:
     dependencies:
