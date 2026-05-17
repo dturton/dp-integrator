@@ -185,9 +185,9 @@ describe('handleOrderMessage — Slice D5 full pipeline', () => {
     if (outcome.kind === 'imported') expect(outcome.customer.isGuest).toBe(true);
     // Customer record NOT created (guest path used the fallback id)
     expect(ns.getRecords(acme.nsAccountId, 'customer' as never).size).toBe(0);
-    // But the order WAS written (with entity=99)
+    // But the order WAS written (with entity={ id: '99' } — payload builder wraps refs)
     const orderRecord = ns.getRecords(acme.nsAccountId, 'salesorder' as never).get('gid://shopify/Order/12345');
-    expect(orderRecord?.payload['entity']).toBe('99');
+    expect(orderRecord?.payload['entity']).toEqual({ id: '99' });
   });
 
   it('rejects bad message shape', async () => {

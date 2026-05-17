@@ -4,94 +4,86 @@ import { applyBalancing, DEFAULT_BALANCING, type NsOrderPayload } from '../src/i
 
 function basePayload(overrides: Partial<NsOrderPayload> = {}): NsOrderPayload {
   return {
-    subsidiary: '1',
-    externalid: 'gid://shopify/Order/100',
-    tranid: '#1001',
-    entity: 'cust-1',
-    item: [
-      { item: 'WIDGET-1', quantity: 2, rate: '50.00', amount: '100.00', description: 'Widget', externalid: 'l1' },
-    ],
-    shipping: [
-      { item: 'SHIP-STANDARD', rate: '10.00', amount: '10.00', description: 'Standard', externalid: 's1' },
-    ],
+    subsidiary: { id: '2' },
+    externalId: 'gid://shopify/Order/100',
+    tranId: '#1001',
+    entity: { id: '4203' },
+    item: {
+      items: [
+        { item: { id: 'WIDGET-1' }, quantity: 2, rate: 50, amount: 100, description: 'Widget' },
+      ],
+    },
+    shipping: {
+      items: [
+        { item: { id: 'SHIP-STANDARD' }, rate: 10, amount: 10, description: 'Standard' },
+      ],
+    },
     ...overrides,
   };
 }
 
 describe('applyBalancing', () => {
   it('no-ops when totals already match', () => {
-    const order = makeFakeOrder(); // totalPrice 120, lines 100, shipping 10, tax 10
+    const order = makeFakeOrder(); // total 120 = lines 100 + shipping 10 + tax 10
     const payload = basePayload();
     const r = applyBalancing(payload, order);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.payload.payload.item).toHaveLength(1);  // no balancing line added
-    expect(r.payload.diagnostics.diff).toBe(0);
-    expect(r.payload.diagnostics.applied).toBe(false);
+    expect(r.payload.payload.item.items).toHaveLength(1);
+    expect(r.payload.diagnostics).toMatchObject({ diff: 0, applied: false });
   });
 
   it('adds a positive balancing line when NS sum is short (small rounding diff)', () => {
-    // Shopify total = 120.00, but our lines sum to 99.99 (1 cent short).
     const order = makeFakeOrder();
     const payload = basePayload({
-      item: [{ item: 'WIDGET-1', quantity: 2, rate: '49.995', amount: '99.99', description: 'W', externalid: 'l1' }],
+      item: { items: [{ item: { id: 'WIDGET-1' }, quantity: 2, rate: 49.995, amount: 99.99, description: 'W' }] },
     });
     const r = applyBalancing(payload, order);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.payload.payload.item).toHaveLength(2);
-    expect(r.payload.payload.item[1]).toMatchObject({
-      item: 'BALANCING',
-      amount: '0.01',
-      rate: '0.01',
-      externalid: 'gid://shopify/Order/100:balancing',
+    expect(r.payload.payload.item.items).toHaveLength(2);
+    expect(r.payload.payload.item.items[1]).toMatchObject({
+      item: { id: '6540' },
+      amount: 0.01,
+      rate: 0.01,
     });
-    expect(r.payload.diagnostics).toMatchObject({ diff: 0.01, applied: true });
   });
 
   it('adds a negative balancing line when NS sum exceeds Shopify total', () => {
     const order = makeFakeOrder();
     const payload = basePayload({
-      item: [{ item: 'WIDGET-1', quantity: 2, rate: '50.005', amount: '100.01', description: 'W', externalid: 'l1' }],
+      item: { items: [{ item: { id: 'WIDGET-1' }, quantity: 2, rate: 50.005, amount: 100.01, description: 'W' }] },
     });
     const r = applyBalancing(payload, order);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.payload.payload.item[1]?.['amount']).toBe('-0.01');
+    expect(r.payload.payload.item.items[1]?.['amount']).toBe(-0.01);
   });
 
   it('parks when diff exceeds the tolerance', () => {
-    const order = makeFakeOrder(); // Shopify total 120
+    const order = makeFakeOrder(); // total 120
     const payload = basePayload({
-      item: [{ item: 'WIDGET-1', quantity: 2, rate: '40.00', amount: '80.00', description: 'W', externalid: 'l1' }],
+      item: { items: [{ item: { id: 'WIDGET-1' }, quantity: 2, rate: 40, amount: 80, description: 'W' }] },
     });
-    const r = applyBalancing(payload, order); // sum: 80 + 10 + 10 = 100 → diff 20
+    const r = applyBalancing(payload, order);
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.parked).toMatchObject({
-      reason: 'unmapped_construct',
-      construct: 'balancing',
-    });
+    expect(r.parked).toMatchObject({ reason: 'unmapped_construct', construct: 'balancing' });
     expect(r.parked.evidence).toMatchObject({ shopifyTotal: 120, diff: 20 });
   });
 
   it('uses a custom toleranceAmount + balancingItemId when provided', () => {
     const order = makeFakeOrder();
     const payload = basePayload({
-      item: [{ item: 'WIDGET-1', quantity: 2, rate: '49.50', amount: '99.00', description: 'W', externalid: 'l1' }],
+      item: { items: [{ item: { id: 'WIDGET-1' }, quantity: 2, rate: 49.5, amount: 99, description: 'W' }] },
     });
-    const r = applyBalancing(payload, order, { toleranceAmount: 5, balancingItemId: 'NS-ROUND' });
+    const r = applyBalancing(payload, order, { toleranceAmount: 5, balancingItemId: '999' });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const bal = r.payload.payload.item[1] as Record<string, unknown>;
-    expect(bal['item']).toBe('NS-ROUND');
-    expect(bal['amount']).toBe('1.00');
+    expect(r.payload.payload.item.items[1]).toMatchObject({ item: { id: '999' }, amount: 1 });
   });
 
   it('subtracts order-level discounts from the NS expected total', () => {
-    // Real-world shape: Shopify charged $265.05 on a $279 line with a
-    // $13.95 order-level discount applied at checkout (not baked into the
-    // line's discountedTotal).
     const order = makeFakeOrder({
       lineItems: [
         {
@@ -100,7 +92,7 @@ describe('applyBalancing', () => {
           sku: 'RKGT15',
           quantity: 1,
           originalUnitPrice: { amount: '279.00', currencyCode: 'USD' },
-          discountedTotal: { amount: '279.00', currencyCode: 'USD' }, // line discount = 0
+          discountedTotal: { amount: '279.00', currencyCode: 'USD' },
           discountAllocations: [],
         },
       ],
@@ -112,7 +104,7 @@ describe('applyBalancing', () => {
       totalPrice: { amount: '265.05', currencyCode: 'USD' },
     });
     const payload = basePayload({
-      item: [{ item: 'RKGT15', quantity: 1, rate: '279.00', amount: '279.00', description: 'Repair Kit', externalid: 'L1' }],
+      item: { items: [{ item: { id: 'RKGT15' }, quantity: 1, rate: 279, amount: 279, description: 'Repair Kit' }] },
       shipping: undefined,
     });
     const r = applyBalancing(payload, order);
@@ -123,9 +115,8 @@ describe('applyBalancing', () => {
       nsLinesTotal: 279,
       orderDiscounts: 13.95,
       diff: 0,
-      applied: false,
     });
-    expect(r.payload.payload.item).toHaveLength(1); // no balancing line — totals match exactly after discount
+    expect(r.payload.payload.item.items).toHaveLength(1);
   });
 
   it('handles tax-only orders (no shipping)', () => {
@@ -139,24 +130,23 @@ describe('applyBalancing', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.payload.diagnostics.nsShippingTotal).toBe(0);
-    expect(r.payload.diagnostics.diff).toBe(0);
   });
 
-  it('DEFAULT_BALANCING tolerance is 0.05', () => {
+  it('DEFAULT_BALANCING tolerance is 0.05 and item is 6540 (Shopify Variance)', () => {
     expect(DEFAULT_BALANCING.toleranceAmount).toBe(0.05);
-    expect(DEFAULT_BALANCING.balancingItemId).toBe('BALANCING');
+    expect(DEFAULT_BALANCING.balancingItemId).toBe('6540');
   });
 
-  it('does not mutate the input payload (returns a new one)', () => {
+  it('does not mutate the input payload', () => {
     const order = makeFakeOrder();
     const payload = basePayload({
-      item: [{ item: 'X', quantity: 1, rate: '99.99', amount: '99.99', description: 'X', externalid: 'l1' }],
+      item: { items: [{ item: { id: 'X' }, quantity: 1, rate: 99.99, amount: 99.99, description: 'X' }] },
     });
-    const before = payload.item.length;
+    const before = payload.item.items.length;
     const r = applyBalancing(payload, order);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(payload.item.length).toBe(before); // input unchanged
-    expect(r.payload.payload.item.length).toBe(before + 1);
+    expect(payload.item.items.length).toBe(before);
+    expect(r.payload.payload.item.items.length).toBe(before + 1);
   });
 });

@@ -13,28 +13,25 @@ import { buildDefaultLineItemsMap, buildDefaultOrderHeaderMap, buildDefaultShipp
 import { defaultDeriveRegistry } from './derive-fns.js';
 
 /**
- * Assembled NS payload for a Sales Order or Cash Sale. The shape is what
- * `NetSuiteGateway.upsertByExternalId(...)` receives in `payload`.
+ * Assembled NS payload for a Sales Order or Cash Sale. Shape matches what
+ * `NetSuiteGateway.upsertByExternalId(...)` ships to NS REST:
  *
- * Slice D1 builds the header + line items + shipping. Tax (D2) and the
- * rounding/balancing line (D3) extend this structure:
- *   - Tax strategy fills `taxdetailsoverride` / `taxitem` / `taxcode` slots
- *   - Balancing appends a final adjustment item to `item[]`
+ *   - Reference fields (subsidiary, entity, currency, location,
+ *     orderStatus, paymentMethod) are objects `{ id: '<value>' }`.
+ *   - Line items live under `item: { items: [...] }` per NS sublist
+ *     convention; each line's `item` field is also `{ id: '<value>' }`.
+ *   - Same for shipping under `shipping: { items: [...] }`.
  *
- * Customer is injected by the caller (handler) since `resolveCustomer`
- * already produced the NS internal id.
+ * Mappings produce plain string ids; this builder wraps them via
+ * `wrapNsReferences()` at the end so the field-map config stays terse.
  */
 export interface NsOrderPayload extends Record<string, unknown> {
-  /** Header fields produced by the mapping evaluator. */
-  readonly subsidiary: string;
-  readonly externalid: string;
-  readonly tranid: string;
-  /** NS internal id of the customer. Caller supplies. */
-  readonly entity: string;
-  /** Line-item sublist. */
-  readonly item: ReadonlyArray<Record<string, unknown>>;
-  /** Shipping sublist (optional). */
-  readonly shipping?: ReadonlyArray<Record<string, unknown>>;
+  readonly subsidiary: { id: string };
+  readonly externalId: string;
+  readonly tranId: string;
+  readonly entity: { id: string };
+  readonly item: { items: ReadonlyArray<Record<string, unknown>> };
+  readonly shipping?: { items: ReadonlyArray<Record<string, unknown>> };
 }
 
 export interface BuildOrderPayloadArgs {
@@ -43,7 +40,6 @@ export interface BuildOrderPayloadArgs {
   readonly customerInternalId: string;
   readonly lookups: LookupResolver;
   readonly derives?: MapDeriveRegistry;
-  /** Override the default header mapping list (for tests / connection-specific maps). */
   readonly headerOverride?: readonly Mapping[];
 }
 
@@ -53,12 +49,10 @@ export async function buildOrderPayload(
   const derives = args.derives ?? defaultDeriveRegistry();
   const ctx: EvaluatorContext = { lookups: args.lookups, derives };
 
-  // 1. Header mapping (top-level fields).
   const headerMappings = args.headerOverride ?? buildDefaultOrderHeaderMap(args.connection);
   const headerResult = await evaluate(args.order, headerMappings, ctx);
   if (!headerResult.ok) return headerResult;
 
-  // 2. Line items — a single Derive that returns an array.
   const linesResult = await evaluate(args.order, [buildDefaultLineItemsMap()], ctx);
   if (!linesResult.ok) return linesResult;
   const lineItems = linesResult.payload['item'];
@@ -77,41 +71,99 @@ export async function buildOrderPayload(
     });
   }
 
-  // 3. Shipping — optional. Empty array is fine (digital orders).
   const shippingResult = await evaluate(args.order, [buildDefaultShippingMap()], ctx);
   if (!shippingResult.ok) return shippingResult;
   const shippingLines = shippingResult.payload['shipping'];
 
   const header = headerResult.payload;
-  if (typeof header['subsidiary'] !== 'string') {
-    return park({ reason: 'unmapped_construct', detail: 'subsidiary missing from header map', construct: 'subsidiary' });
-  }
-  if (typeof header['externalid'] !== 'string') {
-    return park({ reason: 'unmapped_construct', detail: 'externalid missing from header map', construct: 'externalid' });
-  }
-  if (typeof header['tranid'] !== 'string') {
-    return park({ reason: 'unmapped_construct', detail: 'tranid missing from header map', construct: 'tranid' });
+  for (const required of ['subsidiary', 'externalId', 'tranId'] as const) {
+    if (typeof header[required] !== 'string') {
+      return park({
+        reason: 'unmapped_construct',
+        detail: `${required} missing from header map`,
+        construct: required,
+      });
+    }
   }
 
-  const payload: NsOrderPayload = {
+  // Build the raw payload, then run the NS-ref auto-wrap pass over it.
+  const raw: Record<string, unknown> = {
     ...header,
-    subsidiary: header['subsidiary'],
-    externalid: header['externalid'],
-    tranid: header['tranid'],
     entity: args.customerInternalId,
-    item: lineItems as ReadonlyArray<Record<string, unknown>>,
+    item: lineItems,
     ...(Array.isArray(shippingLines) && shippingLines.length > 0
-      ? { shipping: shippingLines as ReadonlyArray<Record<string, unknown>> }
+      ? { shipping: shippingLines }
       : {}),
   };
-  return { ok: true, payload };
+  return { ok: true, payload: wrapNsReferences(raw) as NsOrderPayload };
 }
 
 /**
- * Map the connection's `orderTarget` to the NetSuite record type string the
- * gateway expects. Kept as a function (rather than inline at the call site)
- * so the same translation can be reused by tests and any future replay path.
+ * Map `connection.orderTarget` to the NS REST record-type string.
  */
 export function netsuiteOrderRecordType(connection: Connection): 'salesorder' | 'cashsale' {
   return connection.orderTarget === 'sales_order' ? 'salesorder' : 'cashsale';
+}
+
+// --- NS payload reference wrapping ------------------------------------------
+
+/**
+ * NS REST API requires reference fields as `{ id: '<value>' }` objects, NOT
+ * bare strings. This pass walks a payload built from the mapping engine
+ * (which produces strings) and wraps every known reference field.
+ *
+ * Header-level refs: subsidiary, entity, currency, location, orderStatus,
+ * paymentMethod, customForm, terms.
+ * Per-line refs: item, taxCode, location, units, price.
+ *
+ * Already-object values pass through unchanged (so connection extras that
+ * explicitly emit `{ id: 'X' }` aren't double-wrapped).
+ */
+const HEADER_REF_FIELDS: readonly string[] = [
+  'subsidiary', 'entity', 'currency', 'location', 'orderStatus', 'paymentMethod',
+  'customForm', 'terms', 'employee', 'salesRep', 'nexus', 'shipMethod',
+];
+
+const LINE_REF_FIELDS: readonly string[] = [
+  'item', 'taxCode', 'location', 'units', 'price', 'department', 'class',
+];
+
+export function wrapNsReferences(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === 'item' || key === 'shipping') {
+      // Sublist: wrap with { items: [...] } and ref-wrap each line's fields.
+      if (Array.isArray(value)) {
+        out[key] = { items: value.map((line) => wrapLineRefs(line as Record<string, unknown>)) };
+      } else {
+        out[key] = value;
+      }
+    } else if (HEADER_REF_FIELDS.includes(key)) {
+      out[key] = wrapRef(value);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function wrapLineRefs(line: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(line)) {
+    if (LINE_REF_FIELDS.includes(k)) {
+      out[k] = wrapRef(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function wrapRef(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'object') return value; // already an object — pass through
+  if (typeof value === 'string' || typeof value === 'number') {
+    return { id: String(value) };
+  }
+  return value;
 }

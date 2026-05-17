@@ -49,6 +49,20 @@ export interface Connection {
   readonly mapVersion: string;
   /** Whether the connection is currently enabled. Disabled connections are config-visible but inert. */
   readonly enabled: boolean;
+  /**
+   * Per-tenant header field overrides. Appended to the built-in default
+   * order-header mapping list, so the connection can layer NS custom fields
+   * (`custbody_*`), per-account orderStatus choices, etc., without code
+   * changes. Carried in `DPI_CONNECTIONS_JSON` for now.
+   *
+   * TODO (M2): promote to a SQL `connection_field_maps` table + admin REST
+   * writer so ops can change tenant fields without a redeploy.
+   *
+   * Typed as `readonly unknown[]` here because validating recursive Mapping
+   * shape at the parser layer is more ceremony than value for v1 — the
+   * mapping evaluator throws clearly on malformed entries.
+   */
+  readonly extraOrderHeaderMappings?: readonly unknown[];
 }
 
 /** A Shopify webhook envelope as we receive it (minimal subset core needs). */

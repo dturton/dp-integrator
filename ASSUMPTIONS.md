@@ -141,6 +141,50 @@ or the v2 architecture spec. These are reversible; flag any that conflict with i
   secrets only for the first deploy + the one-time `ad-admin` grant. Not used
   by the application at runtime.
 
+## Per-tenant NS payload customization
+
+- **Today (Slice D5, option 1):** `Connection.extraOrderHeaderMappings` —
+  optional list of mapping primitives appended to the default order-header
+  map. Carried in `DPI_CONNECTIONS_JSON`. Lets ops add NS custom fields
+  (`custbody_*`), per-tenant `orderStatus` overrides, etc. without code
+  changes. Example for our dev sandbox: emits
+  `custbody_internal_status: "2"` because that NS account has a required
+  custom field configured.
+- **Option 2 deferred:** per-mapVersion JSONC files
+  (`config/field-maps/{version}.jsonc`) loaded at boot. Useful once multiple
+  connections need to share the same set of customizations. Punted because
+  a single deploy currently has one connection.
+- **Option 3 (M2 backlog, REQUIRED for prod):** SQL `connection_field_maps`
+  table + admin REST writer. Ops change tenant-specific fields without a
+  code redeploy. This is the production answer; option 1 is a tactical
+  step that lets us iterate faster while the M1 happy path stabilizes.
+
+## NS REST payload shape (Slice D5)
+
+- **Reference fields are objects:** `subsidiary`, `entity`, `currency`,
+  `location`, `orderStatus`, `paymentMethod`, plus per-line `item`,
+  `taxCode`, etc. NS REST returns `400 INVALID_CONTENT` (with no field-
+  specific detail) when bare strings are sent — found the hard way. The
+  payload builder runs an auto-ref-wrap pass over the mapping evaluator's
+  output (HEADER_REF_FIELDS / LINE_REF_FIELDS lists) so the mapping config
+  stays terse.
+- **Sublists wrap their arrays:** `item: { items: [...] }`, not bare
+  arrays. Same for `shipping`.
+- **Field naming is camelCase:** `tranId`, `tranDate`, `orderStatus`,
+  `paymentMethod`. NS rejects lowercase variants for these specific fields
+  (case-sensitive on the REST API side).
+- **Externalid in body is forbidden when the URL already specifies it:**
+  the `eid:` URL path is authoritative; passing `externalid` in the body
+  with a different value (e.g. raw GID vs URL-encoded form) returns 422
+  `NONEXISTENT_EXTERNAL_ID`. Gateway strips any body-supplied externalid.
+- **NS sandbox subsidiary alignment:** customers, items, and locations
+  must all be in the same subsidiary as the order. Our dev sandbox has
+  items + the only location in subsidiary 2; we set the dev connection's
+  `nsSubsidiary` to '2' and `nsLocation` to '1' (Dade Pump - Miami).
+- **Default balancing item = '6540'** (Shopify Variance) — created in the
+  dev sandbox for this purpose. Connection-specific overrides land via
+  the same per-tenant extras path once per-line tenant configs are added.
+
 ## Open / deferred
 
 - **Real Azure SQL for tests:** not used in M0 (in-memory stores cover the unit-test surface). A

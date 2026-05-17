@@ -141,6 +141,17 @@ function coerceConnection(value: unknown, idx: number): Connection {
   const nsLocation =
     nsLocationRaw === undefined || nsLocationRaw === null ? undefined : String(nsLocationRaw);
 
+  const extrasRaw = v['extraOrderHeaderMappings'];
+  let extraOrderHeaderMappings: readonly unknown[] | undefined;
+  if (extrasRaw !== undefined && extrasRaw !== null) {
+    if (!Array.isArray(extrasRaw)) {
+      throw new Error(
+        `parseConnectionsConfig[${idx}]: extraOrderHeaderMappings must be an array if provided`,
+      );
+    }
+    extraOrderHeaderMappings = extrasRaw;
+  }
+
   const conn: Connection = {
     connectionId: required('connectionId'),
     environment: env,
@@ -155,6 +166,7 @@ function coerceConnection(value: unknown, idx: number): Connection {
     orderTarget: orderTarget as OrderTarget,
     mapVersion: required('mapVersion'),
     enabled,
+    ...(extraOrderHeaderMappings !== undefined ? { extraOrderHeaderMappings } : {}),
   };
   return conn;
 }

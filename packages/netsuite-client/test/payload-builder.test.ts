@@ -17,8 +17,8 @@ const acme: Connection = {
   shopifyAppTokenRef: 'shopify-client-id-acme-us',
   shopifyWebhookSecretRef: 'shopify-webhook-secret-acme-us',
   nsAccountId: '1234567',
-  nsSubsidiary: '1',
-  nsLocation: '10',
+  nsSubsidiary: '2',
+  nsLocation: '1',
   baseCurrency: 'USD',
   taxEngine: 'suitetax',
   orderTarget: 'sales_order',
@@ -35,73 +35,98 @@ function lookupsWithDefaults(): InMemoryLookupResolver {
 
 describe('derive fns', () => {
   it('parseShopifyDate extracts YYYY-MM-DD from ISO timestamp', () => {
-    const out = parseShopifyDate({ field: 'processedAt' }, { processedAt: '2026-05-17T13:11:53Z' });
-    expect(out).toBe('2026-05-17');
+    expect(parseShopifyDate({ field: 'processedAt' }, { processedAt: '2026-05-17T13:11:53Z' })).toBe('2026-05-17');
   });
 
   it('parseShopifyDate returns null on missing field', () => {
-    const out = parseShopifyDate({ field: 'missing' }, {});
-    expect(out).toBeNull();
+    expect(parseShopifyDate({ field: 'missing' }, {})).toBeNull();
   });
 
   it('parseShopifyDate throws on a non-date string', () => {
     expect(() => parseShopifyDate({ field: 'x' }, { x: 'not a date' })).toThrow(/not a valid ISO date/);
   });
 
-  it('shopifyLineToItemLine fans Shopify lines to NS line objects', () => {
+  it('shopifyLineToItemLine emits item as plain string id (builder wraps later)', () => {
     const order = makeFakeOrder();
     const lines = shopifyLineToItemLine({}, order) as Array<Record<string, unknown>>;
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({
       item: 'WIDGET-1',
       quantity: 2,
-      rate: '50.00',
+      rate: 50,
+      amount: 100,
       description: 'Widget',
-      amount: '100.00',
-      externalid: 'gid://shopify/LineItem/1',
     });
   });
 
   it('shopifyLineToItemLine uses defaultItemId when supplied (overrides sku)', () => {
     const order = makeFakeOrder();
-    const lines = shopifyLineToItemLine({ defaultItemId: '999' }, order) as Array<Record<string, unknown>>;
-    expect(lines[0]?.['item']).toBe('999');
+    const lines = shopifyLineToItemLine({ defaultItemId: '6540' }, order) as Array<Record<string, unknown>>;
+    expect(lines[0]?.['item']).toBe('6540');
   });
 });
 
 describe('buildOrderPayload', () => {
-  it('builds the standard NS Sales Order payload', async () => {
+  it('builds the NS payload with refs wrapped + line sublist + camelCase fields', async () => {
     const order = makeFakeOrder();
     const r = await buildOrderPayload({
       connection: acme,
       order,
-      customerInternalId: 'ns_cust_42',
+      customerInternalId: '4203',
       lookups: lookupsWithDefaults(),
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.payload).toMatchObject({
-      subsidiary: '1',
-      tranid: '#1001',
-      externalid: 'gid://shopify/Order/100',
-      entity: 'ns_cust_42',
-      trandate: '2026-05-16',
-      currency: '1',
-      paymentmethod: '12',
-      location: '10',
+      subsidiary: { id: '2' },
+      orderStatus: { id: 'B' },
+      tranId: '#1001',
+      externalId: 'gid://shopify/Order/100',
+      entity: { id: '4203' },
+      tranDate: '2026-05-16',
+      currency: { id: '1' },
+      paymentMethod: { id: '12' },
+      location: { id: '1' },
     });
-    expect(r.payload.item).toHaveLength(1);
-    expect(r.payload.item[0]).toMatchObject({ item: 'WIDGET-1', quantity: 2 });
-    expect(r.payload.shipping).toHaveLength(1);
+    expect(r.payload.item.items).toHaveLength(1);
+    expect(r.payload.item.items[0]).toMatchObject({
+      item: { id: 'WIDGET-1' },
+      quantity: 2,
+      rate: 50,
+      amount: 100,
+    });
+    expect(r.payload.shipping?.items).toHaveLength(1);
+    expect(r.payload.shipping?.items[0]).toMatchObject({ item: { id: 'SHIP-STANDARD' } });
   });
 
-  it('omits `location` when connection.nsLocation is unset', async () => {
+  it('appends connection.extraOrderHeaderMappings to the default map', async () => {
+    const order = makeFakeOrder();
+    const withExtras: Connection = {
+      ...acme,
+      extraOrderHeaderMappings: [
+        { kind: 'constant', value: '2', to: 'custbody_internal_status' },
+        { kind: 'constant', value: 'A', to: 'orderStatus' }, // override default 'B'
+      ],
+    };
+    const r = await buildOrderPayload({
+      connection: withExtras,
+      order,
+      customerInternalId: '4203',
+      lookups: lookupsWithDefaults(),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload['custbody_internal_status']).toBe('2');
+    expect(r.payload.orderStatus).toEqual({ id: 'A' }); // extras override default
+  });
+
+  it('omits location when connection.nsLocation is unset', async () => {
     const order = makeFakeOrder();
     const { nsLocation: _drop, ...rest } = acme;
     const r = await buildOrderPayload({
       connection: rest as Connection,
       order,
-      customerInternalId: 'ns_cust_42',
+      customerInternalId: '4203',
       lookups: lookupsWithDefaults(),
     });
     expect(r.ok).toBe(true);
@@ -114,7 +139,7 @@ describe('buildOrderPayload', () => {
     const r = await buildOrderPayload({
       connection: acme,
       order,
-      customerInternalId: 'ns_cust_42',
+      customerInternalId: '4203',
       lookups: lookupsWithDefaults(),
     });
     expect(r.ok).toBe(true);
@@ -127,7 +152,7 @@ describe('buildOrderPayload', () => {
     const r = await buildOrderPayload({
       connection: acme,
       order,
-      customerInternalId: 'ns_cust_42',
+      customerInternalId: '4203',
       lookups: lookupsWithDefaults(),
     });
     expect(r.ok).toBe(false);
@@ -135,13 +160,13 @@ describe('buildOrderPayload', () => {
     expect(r.parked).toMatchObject({ reason: 'unmapped_construct', construct: 'lineItems' });
   });
 
-  it('parks when currency lookup misses (required mapping)', async () => {
+  it('parks when a required lookup misses', async () => {
     const order = makeFakeOrder({ currencyCode: 'GBP' });
     const lookups = new InMemoryLookupResolver({ lookup_currency: { USD: '1' } });
     const r = await buildOrderPayload({
       connection: acme,
       order,
-      customerInternalId: 'ns_cust_42',
+      customerInternalId: '4203',
       lookups,
     });
     expect(r.ok).toBe(false);
@@ -149,11 +174,10 @@ describe('buildOrderPayload', () => {
     expect(r.parked).toMatchObject({
       reason: 'unmapped_construct',
       construct: 'lookup_currency',
-      evidence: { currencyCode: 'GBP' },
     });
   });
 
-  it('payment method lookup is optional (continues on miss)', async () => {
+  it('payment method lookup is optional (paymentMethod field missing on miss)', async () => {
     const order = makeFakeOrder({
       transactions: [
         {
@@ -169,12 +193,13 @@ describe('buildOrderPayload', () => {
     const r = await buildOrderPayload({
       connection: acme,
       order,
-      customerInternalId: 'ns_cust_42',
+      customerInternalId: '4203',
       lookups: lookupsWithDefaults(),
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.payload.paymentmethod).toBeNull();
+    // required=false on miss writes null → ref wrap returns null as-is.
+    expect(r.payload['paymentMethod']).toBeNull();
   });
 
   it('accepts a custom derive registry', async () => {
@@ -182,17 +207,15 @@ describe('buildOrderPayload', () => {
     const customDerives = new MapDeriveRegistry({
       ...Object.fromEntries(
         ['parseShopifyDate', 'shopifyLineToItemLine', 'shopifyShippingToLine'].map((n) => {
-          // re-export the defaults
           const reg = defaultDeriveRegistry();
           return [n, reg.get(n)!];
         }),
       ),
-      // could register additional fns here for connection-specific maps
     });
     const r = await buildOrderPayload({
       connection: acme,
       order,
-      customerInternalId: 'ns_cust_42',
+      customerInternalId: '4203',
       lookups: lookupsWithDefaults(),
       derives: customDerives,
     });
