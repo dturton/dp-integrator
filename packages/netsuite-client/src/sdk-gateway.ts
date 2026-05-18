@@ -1,7 +1,7 @@
 import { suiteql, type RecordType } from 'netsuite-sdk';
 import type { NetSuiteClientFactory, NsAccountConfig } from './client-factory.js';
 import { shopifyGidToNsExternalId } from './external-id.js';
-import type { NetSuiteGateway, UpsertResult } from './gateway.js';
+import type { CustomerAddressbookEntry, NetSuiteGateway, UpsertResult } from './gateway.js';
 
 /**
  * Real `NetSuiteGateway` backed by `netsuite-sdk`.
@@ -110,6 +110,48 @@ export class SdkNetSuiteGateway implements NetSuiteGateway {
       .build();
 
     return client.suiteql.queryOne<Record<string, unknown>>(sql);
+  }
+
+  async getCustomerAddressbook(args: {
+    nsAccountId: string;
+    customerInternalId: string;
+    shopifyIdField: string;
+  }): Promise<ReadonlyArray<CustomerAddressbookEntry>> {
+    // Connection-controlled column name flows into the SELECT list, which the
+    // builder doesn't escape (escape applies to value bindings, not column
+    // identifiers). Guard with a strict pattern so a malformed config can't
+    // produce broken SQL — NS custom-field script ids are always lowercase
+    // alphanumeric + underscore.
+    if (!/^[a-z][a-z0-9_]*$/.test(args.shopifyIdField)) {
+      throw new Error(
+        `SdkNetSuiteGateway.getCustomerAddressbook: invalid shopifyIdField '${args.shopifyIdField}'`,
+      );
+    }
+    const account = this.resolveAccount(args.nsAccountId);
+    const client = await this.factory.get(account);
+    const sql = suiteql()
+      .select('id', 'defaultbilling', 'defaultshipping', 'label', args.shopifyIdField)
+      .from('customerAddressbook')
+      .whereEquals('entity', args.customerInternalId)
+      .build();
+    const result = await client.suiteql.query<Record<string, unknown>>(sql);
+    return result.items.map((row) => {
+      const internalId = row['id'];
+      const shopifyId = row[args.shopifyIdField];
+      const entry: CustomerAddressbookEntry = {
+        internalId: internalId !== undefined && internalId !== null ? String(internalId) : '',
+        shopifyAddressId:
+          shopifyId !== undefined && shopifyId !== null && String(shopifyId).length > 0
+            ? String(shopifyId)
+            : null,
+        defaultBilling: row['defaultbilling'] === true || row['defaultbilling'] === 'T',
+        defaultShipping: row['defaultshipping'] === true || row['defaultshipping'] === 'T',
+        ...(row['label'] !== undefined && row['label'] !== null
+          ? { label: String(row['label']) }
+          : {}),
+      };
+      return entry;
+    });
   }
 
   async resolveItemId(args: { nsAccountId: string; sku: string }): Promise<string | null> {

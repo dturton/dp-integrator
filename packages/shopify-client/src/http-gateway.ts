@@ -259,14 +259,14 @@ const ORDER_QUERY = `
         firstName
         lastName
         defaultAddress {
-          firstName lastName company address1 address2 city province provinceCode country countryCode zip phone
+          id firstName lastName company address1 address2 city province provinceCode country countryCode zip phone
         }
       }
       billingAddress {
-        firstName lastName company address1 address2 city province provinceCode country countryCode zip phone
+        id firstName lastName company address1 address2 city province provinceCode country countryCode zip phone
       }
       shippingAddress {
-        firstName lastName company address1 address2 city province provinceCode country countryCode zip phone
+        id firstName lastName company address1 address2 city province provinceCode country countryCode zip phone
       }
       lineItems(first: 250) {
         edges {
@@ -315,6 +315,7 @@ const ORDER_QUERY = `
 interface GraphQLMoneyBag { presentmentMoney: { amount: string; currencyCode: string }; }
 
 interface GraphQLAddress {
+  id?: string;
   firstName?: string;
   lastName?: string;
   company?: string;
@@ -486,6 +487,7 @@ function isFraudHeld(risk: GraphQLOrder['risk']): boolean {
 
 function mapAddress(a: GraphQLAddress): ShopifyAddress {
   const out: ShopifyAddress = {};
+  if (a.id !== undefined) (out as Record<string, unknown>)['id'] = a.id;
   if (a.firstName !== undefined) (out as Record<string, unknown>)['firstName'] = a.firstName;
   if (a.lastName !== undefined) (out as Record<string, unknown>)['lastName'] = a.lastName;
   if (a.company !== undefined) (out as Record<string, unknown>)['company'] = a.company;

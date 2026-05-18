@@ -8,7 +8,7 @@ export {
   type NsAccountConfig,
   type NsCredentialRefs,
 } from './client-factory.js';
-export type { NetSuiteGateway, UpsertResult } from './gateway.js';
+export type { CustomerAddressbookEntry, NetSuiteGateway, UpsertResult } from './gateway.js';
 export { SdkNetSuiteGateway } from './sdk-gateway.js';
 export { FakeNetSuiteGateway } from './fake-gateway.js';
 export { shopifyGidToNsExternalId } from './external-id.js';

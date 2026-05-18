@@ -205,3 +205,182 @@ describe('resolveCustomer', () => {
     expect(ra.internalId).not.toBe(rb.internalId);
   });
 });
+
+describe('resolveCustomer — read-merge-write addressbook (D10)', () => {
+  const FIELD = 'custrecord_shopify_address_id';
+  const connWithField: Connection = { ...connection, shopifyAddressIdField: FIELD };
+
+  it('stamps the Shopify address id custom field on a new addressbook entry', async () => {
+    const ns = new FakeNetSuiteGateway();
+    const customer: ShopifyCustomer = {
+      id: 'gid://shopify/Customer/501',
+      firstName: 'Jane',
+      lastName: 'Doe',
+    };
+    await resolveCustomer(
+      { ns },
+      connWithField,
+      customer,
+      { guestCustomerInternalId: '99' },
+      {
+        billing: {
+          id: 'gid://shopify/MailingAddress/901',
+          firstName: 'Jane', lastName: 'Doe', address1: '1 Pay St',
+          city: 'A', provinceCode: 'CA', zip: '12345', countryCode: 'US',
+        },
+        shipping: {
+          id: 'gid://shopify/MailingAddress/901',
+          firstName: 'Jane', lastName: 'Doe', address1: '1 Pay St',
+          city: 'A', provinceCode: 'CA', zip: '12345', countryCode: 'US',
+        },
+      },
+    );
+    const rec = ns.getRecords(connWithField.nsAccountId, 'customer' as never).get(customer.id);
+    const items = (rec?.payload['addressbook'] as { items: Array<Record<string, unknown>> }).items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      defaultBilling: true,
+      defaultShipping: true,
+      label: 'Default',
+    });
+    expect((items[0] as { addressbookaddress: Record<string, unknown> }).addressbookaddress)
+      .toMatchObject({ [FIELD]: 'gid://shopify/MailingAddress/901', addr1: '1 Pay St' });
+    // No prior NS entry → no `id` on the new sublist entry (NS will create one).
+    expect((items[0] as Record<string, unknown>)['id']).toBeUndefined();
+  });
+
+  it('updates an existing addressbook entry in place when its Shopify id matches the incoming address', async () => {
+    const ns = new FakeNetSuiteGateway();
+    const customer: ShopifyCustomer = {
+      id: 'gid://shopify/Customer/502',
+      firstName: 'John',
+      lastName: 'Doe',
+    };
+    // Pretend this customer already exists in NS with one addressbook entry
+    // whose Shopify id matches what the next order will carry.
+    const first = await resolveCustomer(
+      { ns }, connWithField, customer, { guestCustomerInternalId: '99' },
+    );
+    ns.seedCustomerAddressbook(connWithField.nsAccountId, first.internalId, [
+      { internalId: '777', shopifyAddressId: 'gid://shopify/MailingAddress/A', defaultBilling: true, defaultShipping: true, label: 'Default' },
+    ]);
+
+    await resolveCustomer(
+      { ns }, connWithField, customer, { guestCustomerInternalId: '99' },
+      {
+        billing: {
+          id: 'gid://shopify/MailingAddress/A',
+          firstName: 'John', lastName: 'Doe', address1: '99 Updated Ln',
+          city: 'NewCity', provinceCode: 'CA', zip: '90210', countryCode: 'US',
+        },
+        shipping: {
+          id: 'gid://shopify/MailingAddress/A',
+          firstName: 'John', lastName: 'Doe', address1: '99 Updated Ln',
+          city: 'NewCity', provinceCode: 'CA', zip: '90210', countryCode: 'US',
+        },
+      },
+    );
+    const rec = ns.getRecords(connWithField.nsAccountId, 'customer' as never).get(customer.id);
+    const items = (rec?.payload['addressbook'] as { items: Array<Record<string, unknown>> }).items;
+    expect(items).toHaveLength(1);
+    // Matched: addressbook entry carries the existing internal id → NS update in place.
+    expect(items[0]).toMatchObject({
+      id: '777',
+      defaultBilling: true,
+      defaultShipping: true,
+      label: 'Default',
+    });
+    expect((items[0] as { addressbookaddress: Record<string, unknown> }).addressbookaddress)
+      .toMatchObject({ addr1: '99 Updated Ln', [FIELD]: 'gid://shopify/MailingAddress/A' });
+  });
+
+  it('appends a new entry and preserves the unrelated existing one when ids do not match', async () => {
+    const ns = new FakeNetSuiteGateway();
+    const customer: ShopifyCustomer = {
+      id: 'gid://shopify/Customer/503',
+      firstName: 'Jane',
+      lastName: 'Doe',
+    };
+    const first = await resolveCustomer(
+      { ns }, connWithField, customer, { guestCustomerInternalId: '99' },
+    );
+    ns.seedCustomerAddressbook(connWithField.nsAccountId, first.internalId, [
+      { internalId: '500', shopifyAddressId: 'gid://shopify/MailingAddress/OLD', defaultBilling: true, defaultShipping: true, label: 'Default' },
+    ]);
+
+    await resolveCustomer(
+      { ns }, connWithField, customer, { guestCustomerInternalId: '99' },
+      {
+        billing: {
+          id: 'gid://shopify/MailingAddress/NEW',
+          firstName: 'Jane', lastName: 'Doe', address1: '1 New St',
+          city: 'X', provinceCode: 'NY', zip: '00001', countryCode: 'US',
+        },
+      },
+    );
+    const rec = ns.getRecords(connWithField.nsAccountId, 'customer' as never).get(customer.id);
+    const items = (rec?.payload['addressbook'] as { items: Array<Record<string, unknown>> }).items;
+    expect(items).toHaveLength(2);
+    // New entry — no NS internal id, address content + Shopify id stamped.
+    expect(items[0]).toMatchObject({
+      defaultBilling: true,
+      defaultShipping: true,
+      label: 'Billing',
+    });
+    expect((items[0] as Record<string, unknown>)['id']).toBeUndefined();
+    expect((items[0] as { addressbookaddress: Record<string, unknown> }).addressbookaddress)
+      .toMatchObject({ [FIELD]: 'gid://shopify/MailingAddress/NEW' });
+    // Preserved entry — id only, default flags forcibly unset (the new entry
+    // claims both defaults; NS rejects multiple-default sublists).
+    expect(items[1]).toMatchObject({
+      id: '500',
+      defaultBilling: false,
+      defaultShipping: false,
+      label: 'Default',
+    });
+    expect((items[1] as Record<string, unknown>)['addressbookaddress']).toBeUndefined();
+  });
+
+  it('appends without an internal id when the incoming address has no Shopify id', async () => {
+    const ns = new FakeNetSuiteGateway();
+    const customer: ShopifyCustomer = { id: 'gid://shopify/Customer/504', firstName: 'A' };
+    await resolveCustomer(
+      { ns }, connWithField, customer, { guestCustomerInternalId: '99' },
+      {
+        billing: {
+          // no `id` — should NOT try to match anything; should NOT stamp the custom field.
+          firstName: 'A', address1: '7 Idless Way', city: 'Y', provinceCode: 'CA', zip: '99999', countryCode: 'US',
+        },
+      },
+    );
+    const rec = ns.getRecords(connWithField.nsAccountId, 'customer' as never).get(customer.id);
+    const items = (rec?.payload['addressbook'] as { items: Array<Record<string, unknown>> }).items;
+    expect(items).toHaveLength(1);
+    expect((items[0] as Record<string, unknown>)['id']).toBeUndefined();
+    const addr = (items[0] as { addressbookaddress: Record<string, unknown> }).addressbookaddress;
+    expect(addr['addr1']).toBe('7 Idless Way');
+    expect(addr[FIELD]).toBeUndefined();
+  });
+
+  it('falls back to legacy overwrite when the connection has no shopifyAddressIdField', async () => {
+    // Sanity check: pre-D10 path is unaffected when the new field isn't configured.
+    const ns = new FakeNetSuiteGateway();
+    const customer: ShopifyCustomer = { id: 'gid://shopify/Customer/505', firstName: 'A' };
+    await resolveCustomer(
+      { ns }, connection, customer, { guestCustomerInternalId: '99' },
+      {
+        billing: {
+          id: 'gid://shopify/MailingAddress/ZZZ',  // present but ignored when field unset
+          firstName: 'A', address1: '1 Legacy Rd', city: 'Z', provinceCode: 'CA', zip: '11111', countryCode: 'US',
+        },
+      },
+    );
+    const rec = ns.getRecords(connection.nsAccountId, 'customer' as never).get(customer.id);
+    const items = (rec?.payload['addressbook'] as { items: Array<Record<string, unknown>> }).items;
+    expect(items).toHaveLength(1);
+    const addr = (items[0] as { addressbookaddress: Record<string, unknown> }).addressbookaddress;
+    expect(addr['addr1']).toBe('1 Legacy Rd');
+    // No custom-field stamp in the legacy path.
+    expect(addr[FIELD]).toBeUndefined();
+  });
+});

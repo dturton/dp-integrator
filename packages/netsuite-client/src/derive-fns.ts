@@ -111,11 +111,24 @@ export const shopifyShippingToLine: DeriveFn = (args, source) => {
  *   countryCode         → country         (2-letter ISO, emitted as plain string)
  *   phone               → addrPhone
  *
+ * When `options.shopifyIdField` is set AND the address has an `id`, that
+ * field is emitted on the NS sub-record (e.g.
+ * `custrecord_shopify_address_id: 'gid://shopify/MailingAddress/123'`). The
+ * customer resolver uses this for read-merge-write dedup.
+ *
  * Returns `null` for an address that has no meaningful content (no
  * address1, no city, no zip) so the caller can skip emitting the field
  * rather than land an empty sub-record on the NS payload.
  */
-export function shopifyAddressToNs(addr: ShopifyAddress | undefined | null): Record<string, unknown> | null {
+export interface ShopifyAddressToNsOptions {
+  /** NS custom-field script id to stamp `addr.id` into (e.g. `custrecord_shopify_address_id`). */
+  readonly shopifyIdField?: string;
+}
+
+export function shopifyAddressToNs(
+  addr: ShopifyAddress | undefined | null,
+  options: ShopifyAddressToNsOptions = {},
+): Record<string, unknown> | null {
   if (!addr) return null;
   const hasContent = Boolean(addr.address1 || addr.city || addr.zip);
   if (!hasContent) return null;
@@ -130,6 +143,9 @@ export function shopifyAddressToNs(addr: ShopifyAddress | undefined | null): Rec
   if (addr.zip) out['zip'] = addr.zip;
   if (addr.countryCode) out['country'] = addr.countryCode;
   if (addr.phone) out['addrPhone'] = addr.phone;
+  if (options.shopifyIdField && addr.id) {
+    out[options.shopifyIdField] = addr.id;
+  }
   return out;
 }
 

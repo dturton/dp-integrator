@@ -1,5 +1,5 @@
 import type { RecordType } from 'netsuite-sdk';
-import type { NetSuiteGateway, UpsertResult } from './gateway.js';
+import type { CustomerAddressbookEntry, NetSuiteGateway, UpsertResult } from './gateway.js';
 
 /**
  * In-memory NetSuiteGateway for tests. Models the externalId-keyed upsert
@@ -27,6 +27,14 @@ export class FakeNetSuiteGateway implements NetSuiteGateway {
   /** account → sku → ns internal id. Seeded via `seedItem`; unseeded SKUs resolve to null. */
   private readonly itemBySku = new Map<string, Map<string, string>>();
   private resolveAttempts = 0;
+  /**
+   * account → customer internal id → addressbook rows. Tests seed prior NS
+   * addressbook state via `seedCustomerAddressbook`. Unseeded customers
+   * (newly-upserted via `upsertByExternalId`) return [] from
+   * `getCustomerAddressbook` — matches the "fresh NS record has no
+   * addressbook entries yet" reality.
+   */
+  private readonly customerAddressbooks = new Map<string, Map<string, CustomerAddressbookEntry[]>>();
 
   private bucket(
     nsAccountId: string,
@@ -117,5 +125,36 @@ export class FakeNetSuiteGateway implements NetSuiteGateway {
   async resolveItemId(args: { nsAccountId: string; sku: string }): Promise<string | null> {
     this.resolveAttempts += 1;
     return this.itemBySku.get(args.nsAccountId)?.get(args.sku) ?? null;
+  }
+
+  /**
+   * Seed addressbook rows for an existing customer. Tests use this to verify
+   * the resolver's merge-by-shopify-id behavior — call after a first
+   * `resolveCustomer(...)` to pre-populate what "NS already has" before the
+   * second call.
+   */
+  seedCustomerAddressbook(
+    nsAccountId: string,
+    customerInternalId: string,
+    entries: ReadonlyArray<CustomerAddressbookEntry>,
+  ): void {
+    let acct = this.customerAddressbooks.get(nsAccountId);
+    if (!acct) {
+      acct = new Map();
+      this.customerAddressbooks.set(nsAccountId, acct);
+    }
+    acct.set(customerInternalId, [...entries]);
+  }
+
+  async getCustomerAddressbook(args: {
+    nsAccountId: string;
+    customerInternalId: string;
+    shopifyIdField: string;
+  }): Promise<ReadonlyArray<CustomerAddressbookEntry>> {
+    // `shopifyIdField` is unused here — the fake stores already-projected
+    // entries via `seedCustomerAddressbook`. The real SDK gateway uses it to
+    // pick the column off the SuiteQL/REST result.
+    void args.shopifyIdField;
+    return this.customerAddressbooks.get(args.nsAccountId)?.get(args.customerInternalId) ?? [];
   }
 }

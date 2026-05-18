@@ -12,6 +12,22 @@ export interface UpsertResult {
   readonly created: boolean;
 }
 
+/**
+ * One row of the customer addressbook sublist. `internalId` is the sublist
+ * entry's id (NS uses it to update-in-place when re-writing the addressbook).
+ * `shopifyAddressId` is the value previously stamped into the connection's
+ * `shopifyAddressIdField` custom field; null when the entry was created
+ * outside this integration (manual NS edit, prior slice) and no id was
+ * stored.
+ */
+export interface CustomerAddressbookEntry {
+  readonly internalId: string;
+  readonly shopifyAddressId: string | null;
+  readonly defaultBilling: boolean;
+  readonly defaultShipping: boolean;
+  readonly label?: string;
+}
+
 export interface NetSuiteGateway {
   /**
    * Atomic create-or-update keyed on `externalId`. The brief's idempotency
@@ -40,6 +56,27 @@ export interface NetSuiteGateway {
     externalId: string;
     fields?: readonly string[];
   }): Promise<Record<string, unknown> | null>;
+
+  /**
+   * Read the customer's `addressbook` sublist so the resolver can dedup
+   * incoming order addresses against entries already on the record.
+   *
+   * Each returned entry carries the NS internal id of the addressbook *entry*
+   * (the sublist line — `customerAddressbook.id`, NOT the underlying address
+   * record's id) plus the Shopify address GID we previously stamped onto it
+   * via the custom field whose script id is passed in `shopifyIdField`.
+   * Entries without a stored Shopify id surface with `shopifyAddressId =
+   * null` so callers can still see and preserve them (manual NS edits,
+   * pre-slice rows, etc.).
+   *
+   * Implementations should return `[]` when the customer has no addressbook
+   * entries yet (newly-created NS record), NOT throw.
+   */
+  getCustomerAddressbook(args: {
+    nsAccountId: string;
+    customerInternalId: string;
+    shopifyIdField: string;
+  }): Promise<ReadonlyArray<CustomerAddressbookEntry>>;
 
   /**
    * Resolve a NetSuite `item` (inventory or shipping item) by its `itemid`

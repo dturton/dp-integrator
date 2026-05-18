@@ -18,6 +18,20 @@ export interface MoneyV2 {
 }
 
 export interface ShopifyAddress {
+  /**
+   * Shopify MailingAddress GID (e.g. `gid://shopify/MailingAddress/123456`).
+   *
+   * On an Order, `shippingAddress` and `billingAddress` are *snapshots* —
+   * each order carries its own MailingAddress with its own id, even if the
+   * buyer reused a saved address. The id is still useful for deduping
+   * downstream (we stamp it onto NS addressbook entries as
+   * `custrecord_shopify_address_id`) so the same snapshot from a retried
+   * import collapses to one entry rather than appending.
+   *
+   * Optional: some address surfaces in Shopify don't expose an id (e.g.
+   * inline checkout-only addresses before they're persisted).
+   */
+  readonly id?: string;
   readonly firstName?: string;
   readonly lastName?: string;
   readonly company?: string;

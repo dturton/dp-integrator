@@ -170,6 +170,12 @@ function coerceConnection(value: unknown, idx: number): Connection {
       ? undefined
       : Boolean(writeTagsOnImportRaw);
 
+  const shopifyAddressIdFieldRaw = v['shopifyAddressIdField'];
+  const shopifyAddressIdField =
+    shopifyAddressIdFieldRaw === undefined || shopifyAddressIdFieldRaw === null
+      ? undefined
+      : String(shopifyAddressIdFieldRaw);
+
   const conn: Connection = {
     connectionId: required('connectionId'),
     environment: env,
@@ -188,6 +194,7 @@ function coerceConnection(value: unknown, idx: number): Connection {
     ...(defaultShipItemId !== undefined ? { defaultShipItemId } : {}),
     ...(defaultDiscountItemId !== undefined ? { defaultDiscountItemId } : {}),
     ...(writeTagsOnImport !== undefined ? { writeTagsOnImport } : {}),
+    ...(shopifyAddressIdField !== undefined ? { shopifyAddressIdField } : {}),
   };
   return conn;
 }

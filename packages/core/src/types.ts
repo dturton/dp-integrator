@@ -106,6 +106,23 @@ export interface Connection {
    * tag operation later (a future slice; for now, manually).
    */
   readonly writeTagsOnImport?: boolean;
+  /**
+   * NS custom-field script id on the Address sub-record used to store the
+   * Shopify MailingAddress GID (typically `custrecord_shopify_address_id`).
+   *
+   * When set, the customer resolver does a read-merge-write of the addressbook
+   * keyed on this field: an incoming order address whose id matches an existing
+   * addressbook entry updates that entry in place; non-matching incoming
+   * addresses append; existing entries that aren't matched are preserved
+   * untouched. The SO header keeps using its own inline `shippingAddress`/
+   * `billingAddress` sub-records (custom-on-SO), independent of the customer
+   * addressbook.
+   *
+   * When unset, addressbook behavior falls back to the prior overwrite-by-value
+   * model (slice D9). Opt-in per connection so tenants without the custom
+   * field don't fail customer upserts with INVALID_FIELD.
+   */
+  readonly shopifyAddressIdField?: string;
 }
 
 /** A Shopify webhook envelope as we receive it (minimal subset core needs). */
