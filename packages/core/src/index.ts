@@ -56,6 +56,13 @@ export {
   type ConnectionsRepo,
 } from './connections/connections-repo.js';
 
+// Sync watermarks (M3 — catch-up poller)
+export {
+  InMemorySyncWatermarkStore,
+  type SyncWatermarkRow,
+  type SyncWatermarkStore,
+} from './watermark/sync-watermark-store.js';
+
 // Replay (M2)
 export {
   requestReplay,

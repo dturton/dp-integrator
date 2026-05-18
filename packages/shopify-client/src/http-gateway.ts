@@ -1,5 +1,5 @@
 import type { Connection, SecretProvider } from '@dpi/core';
-import { OrderNotFoundError, type ShopifyGateway } from './gateway.js';
+import { OrderNotFoundError, type OrderSummary, type ShopifyGateway } from './gateway.js';
 import { verifyShopifyHmac } from './hmac.js';
 import type {
   MoneyV2,
@@ -95,6 +95,51 @@ export class ShopifyHttpGateway implements ShopifyGateway {
     return mapGraphQLOrder(json.data.order);
   }
 
+  async listOrdersUpdatedSince(
+    connection: Connection,
+    args: { since: string; limit?: number },
+  ): Promise<ReadonlyArray<OrderSummary>> {
+    const limit = args.limit ?? 250;
+    const accessToken = await this.resolveAccessToken(connection);
+    const url = `https://${connection.shopifyStore}/admin/api/${this.apiVersion}/graphql.json`;
+    // Shopify's `query` argument on the orders connection supports the
+    // standard search syntax. `updated_at:>=` plus `sortKey: UPDATED_AT`
+    // ascending gives us oldest-first within the window — the watermark
+    // advances monotonically.
+    const queryString = `updated_at:>='${args.since}'`;
+    const res = await this.fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': accessToken,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        query: ORDERS_UPDATED_SINCE_QUERY,
+        variables: { first: limit, query: queryString },
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(
+        `ShopifyHttpGateway.listOrdersUpdatedSince: ${connection.shopifyStore} returned ${res.status}: ${text}`,
+      );
+    }
+    const json = (await res.json()) as {
+      data?: { orders?: { edges?: ReadonlyArray<{ node: { id: string; updatedAt: string } }> } | null };
+      errors?: ReadonlyArray<{ message?: string }>;
+    };
+    if (json.errors && json.errors.length > 0) {
+      throw new Error(
+        `ShopifyHttpGateway.listOrdersUpdatedSince: GraphQL errors: ${json.errors
+          .map((e) => e.message ?? '?')
+          .join('; ')}`,
+      );
+    }
+    const edges = json.data?.orders?.edges ?? [];
+    return edges.map((e) => ({ id: e.node.id, updatedAt: e.node.updatedAt }));
+  }
+
   async tagOrder(
     connection: Connection,
     orderGid: string,
@@ -168,6 +213,16 @@ export class ShopifyHttpGateway implements ShopifyGateway {
 }
 
 // --- GraphQL queries + response shapes -------------------------------------
+
+const ORDERS_UPDATED_SINCE_QUERY = `
+  query OrdersUpdatedSince($first: Int!, $query: String!) {
+    orders(first: $first, query: $query, sortKey: UPDATED_AT, reverse: false) {
+      edges {
+        node { id updatedAt }
+      }
+    }
+  }
+`;
 
 const TAGS_ADD_MUTATION = `
   mutation TagsAdd($id: ID!, $tags: [String!]!) {

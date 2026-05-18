@@ -13,6 +13,7 @@ import { getAppContext } from './bootstrap.js';
 import { PostgresLookupResolver } from './adapters/index.js';
 import { registerAdminReplay } from './triggers/admin-replay.js';
 import { registerNsDiagnostic } from './triggers/ns-diagnostic.js';
+import { registerOrderCatchupPoller } from './triggers/order-catchup-poller.js';
 import { registerOrderDlqHandler } from './triggers/order-dlq-handler.js';
 import { registerOrderImportHandler } from './triggers/order-import-handler.js';
 import { registerShopifyWebhook } from './triggers/shopify-webhook.js';
@@ -82,5 +83,22 @@ registerOrderDlqHandler(() => {
     environment: ctx.environment,
     connections: ctx.connections,
     errorStore: ctx.errorStore,
+  };
+});
+
+// M3-A: catch-up poller. Periodically asks Shopify for orders with
+// updatedAt >= watermark for each enabled connection and republishes any
+// the xref doesn't already know about — recovers from webhooks Shopify
+// dropped (outage, our host down). Watermark + idempotency claim absorb
+// any overlap between this and the live receiver.
+registerOrderCatchupPoller(() => {
+  const ctx = getAppContext();
+  return {
+    environment: ctx.environment,
+    connections: ctx.connections,
+    xrefStore: ctx.xrefStore,
+    watermarkStore: ctx.watermarkStore,
+    shopify: ctx.shopify,
+    queue: ctx.orderQueue,
   };
 });

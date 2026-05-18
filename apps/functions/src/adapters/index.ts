@@ -9,6 +9,7 @@ export {
 export { buildPgPool, type PgPoolConfig } from './pg-pool.js';
 export { PostgresXrefStore } from './postgres-xref-store.js';
 export { PostgresErrorStore } from './postgres-error-store.js';
+export { PostgresSyncWatermarkStore } from './postgres-sync-watermark-store.js';
 export {
   PostgresLookupResolver,
   type PostgresLookupResolverOptions,

@@ -11,6 +11,7 @@ import {
   type GovernorConfig,
   type QueueProducer,
   type SecretProvider,
+  type SyncWatermarkStore,
   type XrefStore,
 } from '@dpi/core';
 import {
@@ -25,6 +26,7 @@ import {
   BlobEnvelopeStore,
   KeyVaultSecretProvider,
   PostgresErrorStore,
+  PostgresSyncWatermarkStore,
   PostgresXrefStore,
   ServiceBusQueueProducer,
   buildPgPool,
@@ -57,6 +59,8 @@ export interface AppContext {
   readonly xrefStore?: XrefStore;
   /** Slice M2-B. Same lifecycle as xrefStore — both rely on pgPool. */
   readonly errorStore?: ErrorStore;
+  /** Slice M3-A — catch-up poller cursor per (connection, flow). */
+  readonly watermarkStore?: SyncWatermarkStore;
 }
 
 let cached: AppContext | undefined;
@@ -104,10 +108,12 @@ function buildAppContext(): AppContext {
   let pgPool: pg.Pool | undefined;
   let xrefStore: XrefStore | undefined;
   let errorStore: ErrorStore | undefined;
+  let watermarkStore: SyncWatermarkStore | undefined;
   if (pgHost && pgDatabase && pgUser) {
     pgPool = buildPgPool({ host: pgHost, database: pgDatabase, user: pgUser });
     xrefStore = new PostgresXrefStore(pgPool);
     errorStore = new PostgresErrorStore(pgPool);
+    watermarkStore = new PostgresSyncWatermarkStore(pgPool);
   }
 
   return {
@@ -128,6 +134,7 @@ function buildAppContext(): AppContext {
     ...(pgPool ? { pgPool } : {}),
     ...(xrefStore ? { xrefStore } : {}),
     ...(errorStore ? { errorStore } : {}),
+    ...(watermarkStore ? { watermarkStore } : {}),
   };
 }
 

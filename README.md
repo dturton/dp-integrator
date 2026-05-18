@@ -196,6 +196,32 @@ The verb refuses by default if the xref is `synced` (no double-import — see
 brief invariant 1). It deletes the row and publishes for `pending` / `error` /
 `ignored`; if no row exists it just publishes.
 
+### Catch-up poller (M3-A)
+
+A timer-triggered function (`orderCatchupPoller`, default cron `0 */10 * * * *`
+— every 10 min) asks Shopify "what orders changed since the last watermark?"
+for every enabled connection, then publishes any that the xref doesn't
+already have at `status='synced'` (or `'ignored'`) back onto the same SB
+topic the receiver uses. The order handler then runs through normally —
+idempotency at the claim step absorbs any overlap with a live webhook.
+
+This is the dropped-webhook safety net. If Shopify ever fails to deliver a
+webhook, the function host is down during a delivery, or the receiver
+returns non-200 longer than Shopify retries, the next poll picks the order
+back up.
+
+Per-connection state lives in `sync_watermarks` (PK: `environment +
+connection_id + flow='order-catchup'`). The poller bootstraps from
+`now - 24h` on first run for a new connection, then advances the cursor
+to the latest `updatedAt` observed (or `now - 60s` on an empty poll, so
+the lookback doesn't grow indefinitely between sparse polls).
+
+Inspect state from the dpi CLI's PG env:
+
+```sql
+SELECT * FROM sync_watermarks WHERE environment = 'dev';
+```
+
 ### Dead-letter quarantine
 
 Service Bus moves a message to the subscription DLQ after

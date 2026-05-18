@@ -1,5 +1,5 @@
 import type { Connection } from '@dpi/core';
-import { OrderNotFoundError, type ShopifyGateway } from './gateway.js';
+import { OrderNotFoundError, type OrderSummary, type ShopifyGateway } from './gateway.js';
 import type { ShopifyOrder } from './order.js';
 
 /**
@@ -64,6 +64,23 @@ export class FakeShopifyGateway implements ShopifyGateway {
   /** Test helper: read the tags currently on a seeded order. */
   getTags(orderGid: string): readonly string[] {
     return Array.from(this.tags.get(orderGid) ?? []).sort();
+  }
+
+  async listOrdersUpdatedSince(
+    _connection: Connection,
+    args: { since: string; limit?: number },
+  ): Promise<ReadonlyArray<OrderSummary>> {
+    const limit = args.limit ?? 250;
+    const sinceMs = Date.parse(args.since);
+    if (Number.isNaN(sinceMs)) {
+      throw new Error(`FakeShopifyGateway.listOrdersUpdatedSince: 'since' not parseable: ${args.since}`);
+    }
+    const matching = Array.from(this.orders.values())
+      .filter((o) => Date.parse(o.updatedAt) >= sinceMs)
+      .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt))
+      .slice(0, limit)
+      .map((o) => ({ id: o.id, updatedAt: o.updatedAt }));
+    return matching;
   }
 }
 

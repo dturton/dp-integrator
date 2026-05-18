@@ -11,7 +11,7 @@ export type {
   ShopifyTaxLine,
   ShopifyTransaction,
 } from './order.js';
-export { OrderNotFoundError, type ShopifyGateway } from './gateway.js';
+export { OrderNotFoundError, type OrderSummary, type ShopifyGateway } from './gateway.js';
 export { FakeShopifyGateway, makeFakeOrder } from './fake-gateway.js';
 export { verifyShopifyHmac } from './hmac.js';
 export {

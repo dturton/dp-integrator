@@ -47,6 +47,35 @@ export interface ShopifyGateway {
    * surface them.
    */
   tagOrder(connection: Connection, orderGid: string, tags: readonly string[]): Promise<readonly string[]>;
+
+  /**
+   * Page through orders with `updatedAt >= since`, oldest-first, for the
+   * catch-up poller (slice M3-A). The poller asks Shopify "what changed
+   * since the last watermark?" and enqueues anything the xref doesn't
+   * already know about — recovers from webhooks the receiver missed
+   * (Shopify outage, network blip, our function host down).
+   *
+   * Implementations should:
+   *   - cap the result at `limit` (default 250, the GraphQL max page) and
+   *     order ascending by `updatedAt` so the watermark advances
+   *     monotonically;
+   *   - return only the minimum the handler needs — id (GID), updatedAt,
+   *     and the topic-ish flavor — because the handler re-fetches the
+   *     full order from `getOrder` anyway (brief invariant 3).
+   *
+   * Returns a single page; the poller calls again with the next `since`
+   * if the page is full.
+   */
+  listOrdersUpdatedSince(
+    connection: Connection,
+    args: { since: string; limit?: number },
+  ): Promise<ReadonlyArray<OrderSummary>>;
+}
+
+/** Minimum order shape the catch-up poller needs. */
+export interface OrderSummary {
+  readonly id: string;
+  readonly updatedAt: string;
 }
 
 /**
