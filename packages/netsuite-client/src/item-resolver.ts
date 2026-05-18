@@ -24,12 +24,30 @@ import type { NsOrderPayload } from './payload-builder.js';
  * don't guess" stance — operators see the missing SKU on `dpi parked` and
  * either create the item in NS or correct the SKU in Shopify.
  */
+export interface ResolveItemReferencesOptions {
+  /**
+   * NS internal id of a generic catch-all item. When set, an item-line SKU
+   * that doesn't resolve in NS falls onto this id instead of parking the
+   * order. Only applied to the `item` sublist — shipping lines keep parking
+   * on miss because they have their own per-connection `defaultShipItemId`
+   * fed in upstream by the payload builder.
+   */
+  readonly fallbackItemInternalId?: string;
+}
+
 export async function resolveItemReferences(
   payload: NsOrderPayload,
   ns: NetSuiteGateway,
   nsAccountId: string,
+  options: ResolveItemReferencesOptions = {},
 ): Promise<MappingResult<NsOrderPayload>> {
-  const itemLines = await resolveSublist(payload.item.items, ns, nsAccountId, 'item');
+  const itemLines = await resolveSublist(
+    payload.item.items,
+    ns,
+    nsAccountId,
+    'item',
+    options.fallbackItemInternalId,
+  );
   if (!itemLines.ok) return itemLines;
 
   let shippingLines: { items: ReadonlyArray<Record<string, unknown>> } | undefined;
@@ -52,6 +70,7 @@ async function resolveSublist(
   ns: NetSuiteGateway,
   nsAccountId: string,
   sublistName: 'item' | 'shipping',
+  fallbackInternalId?: string,
 ): Promise<MappingResult<ReadonlyArray<Record<string, unknown>>>> {
   const resolved: Record<string, unknown>[] = [];
   for (const [idx, line] of lines.entries()) {
@@ -73,6 +92,10 @@ async function resolveSublist(
     }
     const internalId = await ns.resolveItemId({ nsAccountId, sku: idStr });
     if (internalId === null) {
+      if (fallbackInternalId !== undefined) {
+        resolved.push({ ...line, item: { id: fallbackInternalId } });
+        continue;
+      }
       return park({
         reason: 'unmapped_construct',
         detail: `${sublistName}[${idx}]: no NS item matches sku/title '${idStr}' — create the item in NS or correct the source`,
