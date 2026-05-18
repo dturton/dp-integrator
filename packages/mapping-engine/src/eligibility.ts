@@ -4,13 +4,19 @@ import type { ShopifyOrder } from '@dpi/shopify-client';
  * Result of running the eligibility predicate over a re-fetched Shopify order.
  *
  * `eligible: true` → handler proceeds to map + write to NS.
- * `eligible: false` → handler calls `xrefStore.markIgnored(...)` and stops.
+ * `eligible: false` → handler either defers or ignores the order based on
+ * `disposition`.
  *   `reason` is a stable machine-readable string so metrics can bucket by
- *   ignore cause without parsing free text.
+ *   cause without parsing free text.
  */
 export type EligibilityResult =
   | { readonly eligible: true }
-  | { readonly eligible: false; readonly reason: EligibilityReason; readonly detail?: string };
+  | {
+      readonly eligible: false;
+      readonly disposition: 'deferred' | 'ignored';
+      readonly reason: EligibilityReason;
+      readonly detail?: string;
+    };
 
 export type EligibilityReason =
   | 'test_order'
@@ -60,28 +66,30 @@ export function checkEligibility(
 ): EligibilityResult {
   // Test orders MUST NEVER reach NS — brief §1 invariant.
   if (order.test) {
-    return { eligible: false, reason: 'test_order' };
+    return { eligible: false, disposition: 'ignored', reason: 'test_order' };
   }
   if (order.fraudHold) {
-    return { eligible: false, reason: 'fraud_hold' };
+    return { eligible: false, disposition: 'deferred', reason: 'fraud_hold' };
   }
   if (order.financialStatus === 'voided') {
-    return { eligible: false, reason: 'voided' };
+    return { eligible: false, disposition: 'ignored', reason: 'voided' };
   }
   const allowedStatuses = options.allowedFinancialStatuses ?? DEFAULT_FINANCIAL_STATUSES;
   if (!allowedStatuses.includes(order.financialStatus)) {
     return {
       eligible: false,
+      disposition: 'deferred',
       reason: 'pending_payment',
       detail: `financialStatus=${order.financialStatus} not in ${JSON.stringify(allowedStatuses)}`,
     };
   }
   if (order.lineItems.length === 0) {
-    return { eligible: false, reason: 'no_line_items' };
+    return { eligible: false, disposition: 'ignored', reason: 'no_line_items' };
   }
   if (options.allowedTopics && !options.allowedTopics.includes(topic)) {
     return {
       eligible: false,
+      disposition: 'deferred',
       reason: 'disallowed_topic',
       detail: `topic=${topic} not in ${JSON.stringify(options.allowedTopics)}`,
     };

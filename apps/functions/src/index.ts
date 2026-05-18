@@ -20,19 +20,27 @@ import { registerShopifyWebhook } from './triggers/shopify-webhook.js';
 
 registerShopifyWebhook(() => getAppContext());
 
-// Diagnostic-only trigger (dev). Hit GET /api/ns-diagnostic to probe NS
-// reads + writes from the function-host network path. Remove once NS writes
-// stabilize.
-registerNsDiagnostic(() => {
-  const ctx = getAppContext();
-  // Pick the first non-'pending' connection's NS account for the probe.
-  // Synchronous lookup OK because connections are seeded at boot.
-  return {
-    ns: ctx.ns,
-    nsAccountId: '11541804_SB1',
-    nsSubsidiary: '1',
-  };
-});
+// Diagnostic-only trigger. Off by default; enable intentionally when
+// debugging NetSuite connectivity from the deployed function host.
+if (process.env['ENABLE_NS_DIAGNOSTIC'] === 'true') {
+  registerNsDiagnostic(() => {
+    const ctx = getAppContext();
+    return {
+      ns: ctx.ns,
+      nsAccountId:
+        process.env['NS_DIAGNOSTIC_ACCOUNT_ID'] ??
+        (() => {
+          throw new Error('ENABLE_NS_DIAGNOSTIC=true requires NS_DIAGNOSTIC_ACCOUNT_ID');
+        })(),
+      nsSubsidiary:
+        process.env['NS_DIAGNOSTIC_SUBSIDIARY'] ??
+        (() => {
+          throw new Error('ENABLE_NS_DIAGNOSTIC=true requires NS_DIAGNOSTIC_SUBSIDIARY');
+        })(),
+      allowWrites: process.env['ENABLE_NS_DIAGNOSTIC_WRITES'] === 'true',
+    };
+  });
+}
 
 // Slice D5: full pipeline. The handler claims xref, re-fetches the order,
 // runs eligibility, resolves customer, builds the NS payload via the mapping

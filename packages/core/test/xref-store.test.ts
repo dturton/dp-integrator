@@ -21,6 +21,7 @@ describe('InMemoryXrefStore', () => {
     const result = await store.claim(input());
     expect(result.outcome).toBe('claimed');
     expect(result.row.status).toBe('pending');
+    expect(result.row.claimedAt).toBeInstanceOf(Date);
     expect(result.row.targetId).toBeNull();
   });
 
@@ -65,15 +66,47 @@ describe('InMemoryXrefStore', () => {
     expect(store.size()).toBe(2);
   });
 
-  it('recordFailure flips the row to error but keeps it claimable for retry', async () => {
+  it('recordFailure flips the row to error and leaves it terminal until replay', async () => {
     const store = new InMemoryXrefStore();
     await store.claim(input());
     await store.recordFailure(input());
     const row = await store.lookup(input());
     expect(row?.status).toBe('error');
+    expect(row?.claimedAt).toBeNull();
     // A retry claim returns already_claimed (an existing error row), NOT a fresh claim.
     const retry = await store.claim(input());
     expect(retry.outcome).toBe('already_claimed');
+  });
+
+  it('markDeferred makes the row reclaimable on the next claim', async () => {
+    const store = new InMemoryXrefStore();
+    await store.claim(input());
+    await store.markDeferred(input());
+    const row = await store.lookup(input());
+    expect(row?.status).toBe('deferred');
+    expect(row?.claimedAt).toBeNull();
+
+    const retry = await store.claim(input());
+    expect(retry.outcome).toBe('claimed');
+    expect(retry.row.status).toBe('pending');
+    expect(retry.row.claimedAt).toBeInstanceOf(Date);
+  });
+
+  it('reclaims a stale pending lease after claimLeaseMs elapses', async () => {
+    let now = 1_000_000;
+    const store = new InMemoryXrefStore({
+      claimLeaseMs: 1_000,
+      now: () => new Date(now),
+    });
+    const first = await store.claim(input());
+    const second = await store.claim(input());
+    expect(first.outcome).toBe('claimed');
+    expect(second.outcome).toBe('already_claimed');
+
+    now += 2_000;
+    const reclaimed = await store.claim(input());
+    expect(reclaimed.outcome).toBe('claimed');
+    expect(reclaimed.row.claimedAt?.getTime()).toBe(now);
   });
 
   it('markIgnored creates a sentinel row so future deliveries no-op', async () => {

@@ -24,6 +24,7 @@ export function statusColor(status: string): string {
   if (status === 'synced') return `${GREEN}${status}${RESET}`;
   if (status === 'error') return `${RED}${status}${RESET}`;
   if (status === 'pending') return `${YELLOW}${status}${RESET}`;
+  if (status === 'deferred') return `${YELLOW}${status}${RESET}`;
   if (status === 'ignored') return `${CYAN}${status}${RESET}`;
   return status;
 }

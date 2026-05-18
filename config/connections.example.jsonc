@@ -9,10 +9,18 @@
     "environment": "dev",
     "shopifyStore": "acme-us.myshopify.com",
     // Secret-provider refs — names of secrets in Key Vault (prod) or env vars (local).
-    // NEVER the raw values here. Shopify custom apps have two distinct secrets:
-    //   - shopifyAppTokenRef       → Admin API access token (used by ShopifyGateway.getOrder)
+    // NEVER the raw values here. You can authenticate Shopify in either mode:
+    //   1. direct Admin token
+    //      - shopifyAppTokenRef       → Admin API access token
+    //   2. client-credential exchange
+    //      - shopifyClientIdRef       → app client id
+    //      - shopifyClientSecretRef   → app client secret
+    //
+    // Webhook verification is always separate:
     //   - shopifyWebhookSecretRef  → shared secret used for HMAC on inbound webhooks
     "shopifyAppTokenRef": "shopify-token-acme-us",
+    // "shopifyClientIdRef": "shopify-client-id-acme-us",
+    // "shopifyClientSecretRef": "shopify-client-secret-acme-us",
     "shopifyWebhookSecretRef": "shopify-webhook-secret-acme-us",
     "nsAccountId": "1234567",
     "nsSubsidiary": "1",
@@ -28,6 +36,8 @@
     "environment": "dev",
     "shopifyStore": "beta-eu.myshopify.com",
     "shopifyAppTokenRef": "shopify-token-beta-eu",
+    // "shopifyClientIdRef": "shopify-client-id-beta-eu",
+    // "shopifyClientSecretRef": "shopify-client-secret-beta-eu",
     "shopifyWebhookSecretRef": "shopify-webhook-secret-beta-eu",
     "nsAccountId": "7654321",
     "nsSubsidiary": "3",

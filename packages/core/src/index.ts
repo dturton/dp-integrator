@@ -32,9 +32,11 @@ export {
 
 // Xref / idempotency store
 export {
+  DEFAULT_XREF_CLAIM_CONFIG,
   InMemoryXrefStore,
   type ClaimInput,
   type ClaimResult,
+  type XrefClaimConfig,
   type XrefRow,
   type XrefStatus,
   type XrefStore,

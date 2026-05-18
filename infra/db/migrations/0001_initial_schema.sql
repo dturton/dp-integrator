@@ -15,7 +15,9 @@ CREATE TABLE IF NOT EXISTS connections (
   connection_id              VARCHAR(64)  NOT NULL,
   environment                VARCHAR(16)  NOT NULL CHECK (environment IN ('dev','sandbox','prod')),
   shopify_store              VARCHAR(255) NOT NULL,
-  shopify_app_token_ref      VARCHAR(255) NOT NULL,
+  shopify_app_token_ref      VARCHAR(255) NULL,
+  shopify_client_id_ref      VARCHAR(255) NULL,
+  shopify_client_secret_ref  VARCHAR(255) NULL,
   shopify_webhook_secret_ref VARCHAR(255) NOT NULL,
   ns_account_id              VARCHAR(64)  NOT NULL,
   ns_subsidiary              VARCHAR(64)  NOT NULL,
@@ -28,6 +30,10 @@ CREATE TABLE IF NOT EXISTS connections (
   enabled                    BOOLEAN      NOT NULL DEFAULT TRUE,
   created_at                 TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   updated_at                 TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_connections_shopify_auth CHECK (
+    shopify_app_token_ref IS NOT NULL OR
+    (shopify_client_id_ref IS NOT NULL AND shopify_client_secret_ref IS NOT NULL)
+  ),
   CONSTRAINT pk_connections PRIMARY KEY (environment, connection_id)
 );
 
@@ -48,7 +54,8 @@ CREATE TABLE IF NOT EXISTS entity_xref (
   target_id       VARCHAR(64)  NULL,
   target_external VARCHAR(512) NOT NULL,
   source_hash     VARCHAR(128) NULL,
-  status          VARCHAR(16)  NOT NULL CHECK (status IN ('pending','synced','error','ignored')),
+  status          VARCHAR(16)  NOT NULL CHECK (status IN ('pending','deferred','synced','error','ignored')),
+  claimed_at      TIMESTAMPTZ  NULL,
   last_synced_at  TIMESTAMPTZ  NULL,
   created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),

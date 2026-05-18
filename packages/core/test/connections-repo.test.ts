@@ -123,6 +123,28 @@ describe('parseConnectionsConfig', () => {
     expect(() => parseConnectionsConfig(JSON.stringify([bad]))).toThrow(/missing\/empty string field 'nsAccountId'/);
   });
 
+  it('accepts client-credential refs without a direct Admin token ref', () => {
+    const {
+      shopifyAppTokenRef: _dropToken,
+      ...rest
+    } = acme;
+    const parsed = parseConnectionsConfig(JSON.stringify([{
+      ...rest,
+      shopifyClientIdRef: 'shopify-client-id-acme-us',
+      shopifyClientSecretRef: 'shopify-client-secret-acme-us',
+    }]));
+    expect(parsed[0]).toMatchObject({
+      shopifyClientIdRef: 'shopify-client-id-acme-us',
+      shopifyClientSecretRef: 'shopify-client-secret-acme-us',
+    });
+    expect(parsed[0]).not.toHaveProperty('shopifyAppTokenRef');
+  });
+
+  it('throws when only one client-credential ref is provided', () => {
+    const bad = { ...acme, shopifyClientIdRef: 'client-id-only' };
+    expect(() => parseConnectionsConfig(JSON.stringify([bad]))).toThrow(/must be provided together/);
+  });
+
   it('defaults enabled=true when omitted', () => {
     const { enabled: _omit, ...rest } = acme;
     const parsed = parseConnectionsConfig(JSON.stringify([rest]));

@@ -2,7 +2,7 @@ import { buildPool } from '../lib/db.js';
 import { dim, heading, renderTable, statusColor } from '../lib/format.js';
 
 /**
- * `dpi recent [--limit N] [--connection id] [--status imported|parked|ignored]`
+ * `dpi recent [--limit N] [--connection id] [--status imported|parked|ignored|deferred]`
  *
  * Tails the `order_sync_log` table — per-order ledger written by the import
  * handler on every terminal outcome. Surfaces order number, customer email,
@@ -13,8 +13,8 @@ export async function recentCommand(argv: readonly string[]): Promise<void> {
   const limit = parseLimit(argv);
   const connectionId = flagValue(argv, '--connection');
   const status = flagValue(argv, '--status');
-  if (status && !['imported', 'parked', 'ignored'].includes(status)) {
-    throw new Error("dpi recent: --status must be one of: imported, parked, ignored");
+  if (status && !['imported', 'parked', 'ignored', 'deferred'].includes(status)) {
+    throw new Error("dpi recent: --status must be one of: imported, parked, ignored, deferred");
   }
   const env = process.env['DPI_ENVIRONMENT'] ?? 'dev';
 
@@ -102,6 +102,7 @@ function rowStatus(s: string): string {
   // The format library colors 'synced' / 'error' / etc. — bridge naming.
   if (s === 'imported') return 'synced';
   if (s === 'parked') return 'error';
+  if (s === 'deferred') return 'deferred';
   return s;
 }
 
@@ -115,7 +116,7 @@ function noteFor(row: {
     const detail = row.park_detail ? row.park_detail.slice(0, 60) : '';
     return detail ? `${row.park_stage}: ${detail}` : row.park_stage;
   }
-  if (row.status === 'ignored' && row.ignored_reason) {
+  if ((row.status === 'ignored' || row.status === 'deferred') && row.ignored_reason) {
     return row.ignored_reason;
   }
   return undefined;

@@ -176,11 +176,40 @@ function coerceConnection(value: unknown, idx: number): Connection {
       ? undefined
       : String(shopifyAddressIdFieldRaw);
 
+  const shopifyAppTokenRefRaw = v['shopifyAppTokenRef'];
+  const shopifyAppTokenRef =
+    typeof shopifyAppTokenRefRaw === 'string' && shopifyAppTokenRefRaw.length > 0
+      ? shopifyAppTokenRefRaw
+      : undefined;
+  const shopifyClientIdRefRaw = v['shopifyClientIdRef'];
+  const shopifyClientIdRef =
+    typeof shopifyClientIdRefRaw === 'string' && shopifyClientIdRefRaw.length > 0
+      ? shopifyClientIdRefRaw
+      : undefined;
+  const shopifyClientSecretRefRaw = v['shopifyClientSecretRef'];
+  const shopifyClientSecretRef =
+    typeof shopifyClientSecretRefRaw === 'string' && shopifyClientSecretRefRaw.length > 0
+      ? shopifyClientSecretRefRaw
+      : undefined;
+
+  if (!shopifyAppTokenRef && !(shopifyClientIdRef && shopifyClientSecretRef)) {
+    throw new Error(
+      `parseConnectionsConfig[${idx}]: expected either shopifyAppTokenRef or both shopifyClientIdRef + shopifyClientSecretRef`,
+    );
+  }
+  if ((shopifyClientIdRef && !shopifyClientSecretRef) || (!shopifyClientIdRef && shopifyClientSecretRef)) {
+    throw new Error(
+      `parseConnectionsConfig[${idx}]: shopifyClientIdRef and shopifyClientSecretRef must be provided together`,
+    );
+  }
+
   const conn: Connection = {
     connectionId: required('connectionId'),
     environment: env,
     shopifyStore: required('shopifyStore'),
-    shopifyAppTokenRef: required('shopifyAppTokenRef'),
+    ...(shopifyAppTokenRef !== undefined ? { shopifyAppTokenRef } : {}),
+    ...(shopifyClientIdRef !== undefined ? { shopifyClientIdRef } : {}),
+    ...(shopifyClientSecretRef !== undefined ? { shopifyClientSecretRef } : {}),
     shopifyWebhookSecretRef: required('shopifyWebhookSecretRef'),
     nsAccountId: required('nsAccountId'),
     nsSubsidiary: required('nsSubsidiary'),

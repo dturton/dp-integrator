@@ -1,7 +1,8 @@
 -- 0004_order_sync_log.sql  (PostgreSQL)
 -- Per-order ledger: one row per (environment, connection, shopify_order_gid)
 -- capturing a snapshot of the order at the moment the handler reached a
--- terminal outcome (imported / parked / ignored_by_eligibility). Distinct
+-- terminal outcome (imported / parked / ignored_by_eligibility /
+-- deferred_by_eligibility). Distinct
 -- from entity_xref — that table is dedup-only and stays narrow.
 --
 -- This is the table that powers `dpi recent`, reconciliation reports, and
@@ -38,7 +39,7 @@ CREATE TABLE IF NOT EXISTS order_sync_log (
   total_shipping       DECIMAL(18,4) NULL,
 
   -- Outcome
-  status               VARCHAR(16)  NOT NULL CHECK (status IN ('imported','parked','ignored')),
+  status               VARCHAR(16)  NOT NULL CHECK (status IN ('imported','parked','ignored','deferred')),
 
   -- NetSuite link (populated when status='imported'; nullable otherwise)
   ns_account_id        VARCHAR(64)  NULL,

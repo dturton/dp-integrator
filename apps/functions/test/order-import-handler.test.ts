@@ -144,6 +144,25 @@ describe('handleOrderMessage — Slice D5 full pipeline', () => {
     expect(ns.attemptCount()).toBe(0);
   });
 
+  it('pending-payment orders are deferred for later retry, not terminally ignored', async () => {
+    const order = makeFakeOrder({
+      id: 'gid://shopify/Order/12345',
+      financialStatus: 'pending',
+    });
+    const { deps, ns, xrefStore } = buildDeps({ order });
+    const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome).toMatchObject({ kind: 'deferred_by_eligibility', reason: 'pending_payment' });
+    expect(ns.attemptCount()).toBe(0);
+    const row = await xrefStore.lookup({
+      environment: 'dev',
+      connectionId: acme.connectionId,
+      entityType: 'order',
+      sourceSystem: 'shopify',
+      sourceId: 'gid://shopify/Order/12345',
+    });
+    expect(row?.status).toBe('deferred');
+  });
+
   it('parks when a required lookup misses (currency not in lookup_currency)', async () => {
     const order = makeFakeOrder({
       id: 'gid://shopify/Order/12345',

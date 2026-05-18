@@ -44,7 +44,7 @@ Commands:
   recent [opts]           Tail order_sync_log — per-order ledger (order #, email, totals, NS link, status)
       --limit N             default 20
       --connection <id>     filter to one connection
-      --status <s>          filter to imported | parked | ignored
+      --status <s>          filter to imported | parked | ignored | deferred
   replay <gid|id>         Re-publish an order through the import pipeline
       --connection <id>     required — connection id from \`dpi parked\` output
       --force               override the refusal when xref status='synced'

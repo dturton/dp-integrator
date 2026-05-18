@@ -102,8 +102,8 @@ https://<functionAppName>.azurewebsites.net/api/webhooks/shopify/orders
 For each connection in `DPI_CONNECTIONS_JSON`:
 
 1. In the Shopify store admin, create a custom app and copy the **API secret key**
-   (this is the webhook HMAC shared secret — distinct from the Admin API access
-   token).
+   (this is the webhook HMAC shared secret — distinct from both the Admin API access
+   token and any client-credential secrets).
 2. Write it to Key Vault using the ref name from the connection's
    `shopifyWebhookSecretRef` field:
 
@@ -111,8 +111,12 @@ For each connection in `DPI_CONNECTIONS_JSON`:
    az keyvault secret set --vault-name <vaultName> \
      --name shopify-webhook-secret-acme-us --value shpss_xxx
    ```
-3. Also write the Admin API access token to the ref named in
-   `shopifyAppTokenRef` — unused in Slice A but needed for Slice C.
+3. Choose one Shopify API auth mode for the connection:
+   - Direct Admin token:
+     write the Admin API access token to the ref named in `shopifyAppTokenRef`.
+   - Client-credential exchange:
+     write the client id / client secret to the refs named in
+     `shopifyClientIdRef` and `shopifyClientSecretRef`.
 4. In the Shopify admin, register webhooks for `orders/create` and
    `orders/updated` pointing at the function URL.
 
@@ -193,17 +197,20 @@ node apps/admin/dist/cli.js replay 6828043305123 --connection dev-store-1 --forc
 ```
 
 The verb refuses by default if the xref is `synced` (no double-import — see
-brief invariant 1). It deletes the row and publishes for `pending` / `error` /
-`ignored`; if no row exists it just publishes.
+brief invariant 1). It deletes the row and publishes for `pending` / `deferred` /
+`error` / `ignored`; if no row exists it just publishes.
 
 ### Catch-up poller (M3-A)
 
 A timer-triggered function (`orderCatchupPoller`, default cron `0 */10 * * * *`
 — every 10 min) asks Shopify "what orders changed since the last watermark?"
 for every enabled connection, then publishes any that the xref doesn't
-already have at `status='synced'` (or `'ignored'`) back onto the same SB
-topic the receiver uses. The order handler then runs through normally —
-idempotency at the claim step absorbs any overlap with a live webhook.
+already have at `status='synced'`, `'ignored'`, or `'error'` back onto the
+same SB topic the receiver uses. `deferred` rows are intentionally
+re-enqueued so orders that were not yet eligible (for example `pending`
+payment) can import later when Shopify updates them. The order handler then
+runs through normally — idempotency at the claim step absorbs any overlap
+with a live webhook.
 
 This is the dropped-webhook safety net. If Shopify ever fails to deliver a
 webhook, the function host is down during a delivery, or the receiver

@@ -1,5 +1,10 @@
 import type { Connection, SecretProvider } from '@dpi/core';
-import { OrderNotFoundError, type OrderSummary, type ShopifyGateway } from './gateway.js';
+import {
+  OrderNotFoundError,
+  OrderTruncatedError,
+  type OrderSummaryPage,
+  type ShopifyGateway,
+} from './gateway.js';
 import { verifyShopifyHmac } from './hmac.js';
 import type {
   MoneyV2,
@@ -18,13 +23,12 @@ import { ShopifyTokenService } from './token-service.js';
 /**
  * Production `ShopifyGateway` against the Admin GraphQL API.
  *
- * Authentication path (brief invariant 6 + 2026 Dev Dashboard model):
- *   1. Resolve the connection's `shopifyAppTokenRef` to a Shopify client_id
- *      and `shopifyWebhookSecretRef` to a client_secret via the `SecretProvider`.
- *   2. Exchange (client_id, client_secret) for a short-lived `shpat_` access
- *      token via `ShopifyTokenService`. Token cached per shop, refreshed 5 min
- *      before expiry.
- *   3. Use the token in `X-Shopify-Access-Token` for the GraphQL POST.
+ * Authentication path:
+ *   1. Preferred: when the connection carries `shopifyClientIdRef` +
+ *      `shopifyClientSecretRef`, exchange them for a short-lived token via
+ *      `ShopifyTokenService`.
+ *   2. Fallback: otherwise resolve `shopifyAppTokenRef` as a direct Admin API
+ *      access token and use it as-is.
  *
  * `getOrder` runs a single GraphQL query that pulls everything the v1
  * `ShopifyOrder` model needs, in the same shape, so the mapping engine
@@ -92,13 +96,14 @@ export class ShopifyHttpGateway implements ShopifyGateway {
     if (!json.data?.order) {
       throw new OrderNotFoundError(orderGid, connection.shopifyStore);
     }
+    assertOrderComplete(json.data.order, orderGid, connection.shopifyStore);
     return mapGraphQLOrder(json.data.order);
   }
 
   async listOrdersUpdatedSince(
     connection: Connection,
-    args: { since: string; limit?: number },
-  ): Promise<ReadonlyArray<OrderSummary>> {
+    args: { since: string; limit?: number; after?: string },
+  ): Promise<OrderSummaryPage> {
     const limit = args.limit ?? 250;
     const accessToken = await this.resolveAccessToken(connection);
     const url = `https://${connection.shopifyStore}/admin/api/${this.apiVersion}/graphql.json`;
@@ -116,7 +121,7 @@ export class ShopifyHttpGateway implements ShopifyGateway {
       },
       body: JSON.stringify({
         query: ORDERS_UPDATED_SINCE_QUERY,
-        variables: { first: limit, query: queryString },
+        variables: { first: limit, query: queryString, after: args.after ?? null },
       }),
     });
     if (!res.ok) {
@@ -126,7 +131,12 @@ export class ShopifyHttpGateway implements ShopifyGateway {
       );
     }
     const json = (await res.json()) as {
-      data?: { orders?: { edges?: ReadonlyArray<{ node: { id: string; updatedAt: string } }> } | null };
+      data?: {
+        orders?: {
+          edges?: ReadonlyArray<{ cursor: string; node: { id: string; updatedAt: string } }>;
+          pageInfo?: { hasNextPage: boolean; endCursor?: string | null };
+        } | null;
+      };
       errors?: ReadonlyArray<{ message?: string }>;
     };
     if (json.errors && json.errors.length > 0) {
@@ -136,8 +146,13 @@ export class ShopifyHttpGateway implements ShopifyGateway {
           .join('; ')}`,
       );
     }
-    const edges = json.data?.orders?.edges ?? [];
-    return edges.map((e) => ({ id: e.node.id, updatedAt: e.node.updatedAt }));
+    const orders = json.data?.orders;
+    const edges = orders?.edges ?? [];
+    return {
+      items: edges.map((e) => ({ id: e.node.id, updatedAt: e.node.updatedAt })),
+      hasNextPage: orders?.pageInfo?.hasNextPage === true,
+      ...(orders?.pageInfo?.endCursor ? { endCursor: orders.pageInfo.endCursor } : {}),
+    };
   }
 
   async tagOrder(
@@ -197,29 +212,37 @@ export class ShopifyHttpGateway implements ShopifyGateway {
   }
 
   private async resolveAccessToken(connection: Connection): Promise<string> {
-    // shopifyAppTokenRef now holds the client_id ref (Slice C contract — see
-    // ASSUMPTIONS.md on the 2026 Dev Dashboard model).
-    const [clientId, clientSecret] = await Promise.all([
-      this.secrets.getSecret(connection.shopifyAppTokenRef),
-      this.secrets.getSecret(connection.shopifyWebhookSecretRef),
-    ]);
-    const token = await this.tokenService.getAccessToken({
-      shopDomain: connection.shopifyStore,
-      clientId,
-      clientSecret,
-    });
-    return token.accessToken;
+    if (connection.shopifyClientIdRef && connection.shopifyClientSecretRef) {
+      const [clientId, clientSecret] = await Promise.all([
+        this.secrets.getSecret(connection.shopifyClientIdRef),
+        this.secrets.getSecret(connection.shopifyClientSecretRef),
+      ]);
+      const token = await this.tokenService.getAccessToken({
+        shopDomain: connection.shopifyStore,
+        clientId,
+        clientSecret,
+      });
+      return token.accessToken;
+    }
+    if (!connection.shopifyAppTokenRef) {
+      throw new Error(
+        `ShopifyHttpGateway: connection '${connection.connectionId}' has no Admin token ref and no client-credential refs`,
+      );
+    }
+    return this.secrets.getSecret(connection.shopifyAppTokenRef);
   }
 }
 
 // --- GraphQL queries + response shapes -------------------------------------
 
 const ORDERS_UPDATED_SINCE_QUERY = `
-  query OrdersUpdatedSince($first: Int!, $query: String!) {
-    orders(first: $first, query: $query, sortKey: UPDATED_AT, reverse: false) {
+  query OrdersUpdatedSince($first: Int!, $query: String!, $after: String) {
+    orders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT, reverse: false) {
       edges {
+        cursor
         node { id updatedAt }
       }
+      pageInfo { hasNextPage endCursor }
     }
   }
 `;
@@ -284,6 +307,7 @@ const ORDER_QUERY = `
             }
           }
         }
+        pageInfo { hasNextPage }
       }
       shippingLines(first: 25) {
         edges {
@@ -296,15 +320,19 @@ const ORDER_QUERY = `
             taxLines { title rate priceSet { presentmentMoney { amount currencyCode } } }
           }
         }
+        pageInfo { hasNextPage }
       }
       taxLines { title rate priceSet { presentmentMoney { amount currencyCode } } }
       transactions(first: 50) {
-        id
-        kind
-        status
-        gateway
-        processedAt
-        amountSet { presentmentMoney { amount currencyCode } }
+        nodes {
+          id
+          kind
+          status
+          gateway
+          processedAt
+          amountSet { presentmentMoney { amount currencyCode } }
+        }
+        pageInfo { hasNextPage }
       }
       physicalLocation { id }
       risk { recommendation }
@@ -350,10 +378,19 @@ interface GraphQLOrder {
   customer: GraphQLCustomer | null;
   billingAddress?: GraphQLAddress;
   shippingAddress?: GraphQLAddress;
-  lineItems: { edges: ReadonlyArray<{ node: GraphQLLineItem }> };
-  shippingLines: { edges: ReadonlyArray<{ node: GraphQLShippingLine }> };
+  lineItems: {
+    edges: ReadonlyArray<{ node: GraphQLLineItem }>;
+    pageInfo?: { hasNextPage: boolean };
+  };
+  shippingLines: {
+    edges: ReadonlyArray<{ node: GraphQLShippingLine }>;
+    pageInfo?: { hasNextPage: boolean };
+  };
   taxLines: ReadonlyArray<GraphQLTaxLine>;
-  transactions: ReadonlyArray<GraphQLTransaction>;
+  transactions: {
+    nodes: ReadonlyArray<GraphQLTransaction>;
+    pageInfo?: { hasNextPage: boolean };
+  };
   physicalLocation: { id: string } | null;
   risk: { recommendation: string } | null;
 }
@@ -429,7 +466,7 @@ function mapGraphQLOrder(o: GraphQLOrder): ShopifyOrder {
     lineItems: o.lineItems.edges.map((e) => mapLineItem(e.node)),
     shippingLines: o.shippingLines.edges.map((e) => mapShippingLine(e.node)),
     taxLines: o.taxLines.map(mapTaxLine),
-    transactions: o.transactions.map(mapTransaction),
+    transactions: o.transactions.nodes.map(mapTransaction),
   };
   // Optional fields — only attach when actually present to keep the object shape
   // matching `makeFakeOrder` / `exactOptionalPropertyTypes`-friendly callers.
@@ -441,6 +478,16 @@ function mapGraphQLOrder(o: GraphQLOrder): ShopifyOrder {
     ...(o.tags && o.tags.length > 0 ? { tags: o.tags } : {}),
   };
   return { ...order, ...optional };
+}
+
+function assertOrderComplete(order: GraphQLOrder, orderGid: string, shopDomain: string): void {
+  const truncated: string[] = [];
+  if (order.lineItems.pageInfo?.hasNextPage) truncated.push('lineItems');
+  if (order.shippingLines.pageInfo?.hasNextPage) truncated.push('shippingLines');
+  if (order.transactions.pageInfo?.hasNextPage) truncated.push('transactions');
+  if (truncated.length > 0) {
+    throw new OrderTruncatedError(orderGid, shopDomain, truncated);
+  }
 }
 
 function money(bag: GraphQLMoneyBag): MoneyV2 {

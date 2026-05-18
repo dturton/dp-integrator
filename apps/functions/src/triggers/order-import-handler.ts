@@ -26,7 +26,12 @@ import {
   type NetSuiteGateway,
   type NsOrderPayload,
 } from '@dpi/netsuite-client';
-import { OrderNotFoundError, type ShopifyGateway, type ShopifyOrder } from '@dpi/shopify-client';
+import {
+  OrderNotFoundError,
+  OrderTruncatedError,
+  type ShopifyGateway,
+  type ShopifyOrder,
+} from '@dpi/shopify-client';
 import { checkEligibility, type EligibilityReason } from '@dpi/mapping-engine';
 import {
   resolveCustomer,
@@ -44,7 +49,8 @@ import type { OrderWebhookMessage } from '../messages.js';
  *      → already_synced / already_claimed / ignored: short-circuit
  *      → claimed: proceed
  *   4. shopify.getOrder — brief invariant 3 re-fetch
- *   5. checkEligibility — test/fraud/voided/pending/no-lines → markIgnored
+ *   5. checkEligibility — test/voided/no-lines → ignored, pending/fraud/topic
+ *      → deferred for retry
  *   6. resolveCustomer — match or create on NS
  *   7. buildOrderPayload — mapping-engine evaluator + line-item / shipping
  *      derives (Slice D1). On park → recordFailure + outcome 'parked'.
@@ -94,6 +100,7 @@ export type OrderHandlerOutcome =
   | { readonly kind: 'imported'; readonly connectionId: string; readonly orderGid: string; readonly targetId: string; readonly created: boolean; readonly customer: CustomerResolution }
   | { readonly kind: 'parked'; readonly connectionId: string; readonly orderGid: string; readonly stage: 'fetch' | 'mapping' | 'balancing' | 'item_resolution' | 'external_call'; readonly detail: string; readonly errorClass?: ErrorClass }
   | { readonly kind: 'ignored_by_eligibility'; readonly connectionId: string; readonly orderGid: string; readonly reason: EligibilityReason; readonly detail?: string }
+  | { readonly kind: 'deferred_by_eligibility'; readonly connectionId: string; readonly orderGid: string; readonly reason: EligibilityReason; readonly detail?: string }
   | { readonly kind: 'already_synced'; readonly connectionId: string; readonly orderGid: string }
   | { readonly kind: 'already_claimed'; readonly connectionId: string; readonly orderGid: string }
   | { readonly kind: 'ignored'; readonly connectionId: string; readonly orderGid: string }
@@ -158,6 +165,24 @@ export async function handleOrderMessage(
     // 4. Eligibility predicate
     const elig = checkEligibility(order, msg.topic);
     if (!elig.eligible) {
+      if (elig.disposition === 'deferred') {
+        await deps.xrefStore.markDeferred(dedupKey);
+        await writeSyncLog(deps, connection, msg, {
+          status: 'deferred',
+          order,
+          ignoredReason: elig.reason,
+          parkStage: 'eligibility',
+          ...(elig.detail ? { parkDetail: elig.detail } : {}),
+        });
+        return {
+          kind: 'deferred_by_eligibility',
+          connectionId: connection.connectionId,
+          orderGid: msg.orderGid,
+          reason: elig.reason,
+          ...(elig.detail ? { detail: elig.detail } : {}),
+        };
+      }
+
       await deps.xrefStore.markIgnored(dedupKey);
       await writeSyncLog(deps, connection, msg, {
         status: 'ignored',
@@ -326,9 +351,9 @@ export async function handleOrderMessage(
  *     normal recovery path; if it exhausts maxDeliveryCount the DLQ
  *     handler from M2-B records the quarantine row).
  *
- * `OrderNotFoundError` flows through `classifyHandlerError` as 'data' and
- * is parked with the explicit `stage='fetch'` so operators can see why it
- * stopped — preserving the signal Slice E1 introduced.
+ * `OrderNotFoundError` / `OrderTruncatedError` flow through
+ * `classifyHandlerError` as 'data' and are parked with the explicit
+ * `stage='fetch'` so operators can see why it stopped.
  */
 async function classifyAndRoute(
   deps: OrderHandlerDeps,
@@ -364,7 +389,10 @@ async function classifyAndRoute(
   }
 
   // Park: data / unmapped_construct / unknown.
-  const stage = err instanceof OrderNotFoundError ? 'fetch' : 'external_call';
+  const stage =
+    err instanceof OrderNotFoundError || err instanceof OrderTruncatedError
+      ? 'fetch'
+      : 'external_call';
   return parkOutcome(deps, dedupKey, connection, msg, {
     stage,
     detail,
@@ -434,7 +462,7 @@ async function parkOutcome(
  * order.
  */
 interface SyncLogShape {
-  readonly status: 'imported' | 'parked' | 'ignored';
+  readonly status: 'imported' | 'parked' | 'ignored' | 'deferred';
   readonly order?: ShopifyOrder;
   readonly nsAccountId?: string;
   readonly nsRecordType?: 'salesorder' | 'cashsale';
@@ -532,6 +560,8 @@ function describeOutcome(o: OrderHandlerOutcome): string {
     case 'parked':
       return `connection=${o.connectionId} order=${o.orderGid} stage=${o.stage}${o.errorClass ? ` class=${o.errorClass}` : ''} detail="${o.detail}"`;
     case 'ignored_by_eligibility':
+      return `connection=${o.connectionId} order=${o.orderGid} reason=${o.reason}${o.detail ? ` detail="${o.detail}"` : ''}`;
+    case 'deferred_by_eligibility':
       return `connection=${o.connectionId} order=${o.orderGid} reason=${o.reason}${o.detail ? ` detail="${o.detail}"` : ''}`;
     case 'rejected':
       return `reason=${o.reason} detail="${o.detail}"`;

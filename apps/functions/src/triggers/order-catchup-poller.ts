@@ -23,14 +23,15 @@ import type { OrderWebhookMessage } from '../messages.js';
  *      On first run for this connection, bootstrap to `now - lookbackHours`.
  *   2. Ask Shopify for orders with `updatedAt >= watermark`, ascending.
  *   3. For each order in the page, look up the xref. If the row exists
- *      and `status='synced'`, skip — the webhook already imported it. If
- *      the row doesn't exist OR is in a non-terminal state, publish an
- *      `OrderWebhookMessage` to the Service Bus topic so the regular
+ *      and is terminal (`synced`, `ignored`, `error`), skip. If the row
+ *      doesn't exist OR is recoverable (`pending`, `deferred`), publish
+ *      an `OrderWebhookMessage` to the Service Bus topic so the regular
  *      order handler picks it up. Idempotency at the handler's claim
  *      step absorbs any overlap.
- *   4. Advance the watermark to the latest `updatedAt` observed (or to
- *      `now - overlapSeconds` when no orders matched, so the lookback
- *      doesn't grow indefinitely between sparse polls).
+ *   4. Follow Shopify pagination until exhausted (or we hit the per-run
+ *      safety cap), then advance the watermark to the latest `updatedAt`
+ *      observed (or to `now - overlapSeconds` when no orders matched, so
+ *      the lookback doesn't grow indefinitely between sparse polls).
  *
  * The brief's M3 acceptance: "dropped-webhook order appears in NS via
  * poller." That works because the handler is the same `shopifyOrderHandler`
@@ -59,6 +60,8 @@ export interface CatchupConfig {
   readonly overlapSecondsOnEmpty: number;
   /** Page size sent to Shopify. */
   readonly pageSize: number;
+  /** Safety cap on how many Shopify pages one connection consumes per run. */
+  readonly maxPagesPerRun: number;
 }
 
 export const DEFAULT_CATCHUP_CONFIG: CatchupConfig = {
@@ -66,6 +69,7 @@ export const DEFAULT_CATCHUP_CONFIG: CatchupConfig = {
   bootstrapLookbackHours: 24,
   overlapSecondsOnEmpty: 60,
   pageSize: 50,
+  maxPagesPerRun: 20,
 };
 
 export const CATCHUP_FLOW = 'order-catchup';
@@ -124,43 +128,59 @@ async function pollOneConnection(
     existing?.lastCursor ??
     new Date(now.getTime() - config.bootstrapLookbackHours * 3_600_000).toISOString();
 
-  const orders = await deps.shopify.listOrdersUpdatedSince(connection, {
-    since: fromCursor,
-    limit: config.pageSize,
-  });
-
+  let observed = 0;
   let enqueued = 0;
-  for (const summary of orders) {
-    const existingXref = await xrefStore.lookup({
-      environment: deps.environment,
-      connectionId,
-      entityType: 'order',
-      sourceSystem: 'shopify',
-      sourceId: summary.id,
+  let after: string | undefined;
+  let lastUpdatedAt: string | undefined;
+  for (let pageNum = 0; pageNum < config.maxPagesPerRun; pageNum += 1) {
+    const page = await deps.shopify.listOrdersUpdatedSince(connection, {
+      since: fromCursor,
+      limit: config.pageSize,
+      ...(after !== undefined ? { after } : {}),
     });
-    // Skip rows that have already terminally resolved — synced or ignored.
-    // pending / error / absent → re-enqueue so the handler picks it up
-    // (idempotency at the claim step absorbs double deliveries).
-    if (existingXref?.status === 'synced' || existingXref?.status === 'ignored') {
-      continue;
+    observed += page.items.length;
+    for (const summary of page.items) {
+      lastUpdatedAt = summary.updatedAt;
+      const existingXref = await xrefStore.lookup({
+        environment: deps.environment,
+        connectionId,
+        entityType: 'order',
+        sourceSystem: 'shopify',
+        sourceId: summary.id,
+      });
+      // Skip rows that have already terminally resolved — synced / ignored /
+      // parked error. absent / deferred / pending → re-enqueue so the
+      // handler (and claim lease) can recover the order automatically.
+      if (
+        existingXref?.status === 'synced' ||
+        existingXref?.status === 'ignored' ||
+        existingXref?.status === 'error'
+      ) {
+        continue;
+      }
+      const body: OrderWebhookMessage = {
+        schemaVersion: 1,
+        environment: deps.environment,
+        connectionId,
+        shopDomain: connection.shopifyStore,
+        topic: 'orders/updated',
+        orderGid: summary.id,
+        envelopeBlobUri: `catchup://dpi/${deps.environment}/${connectionId}/${encodeURIComponent(
+          summary.id,
+        )}/${now.toISOString()}`,
+        receivedAt: now.toISOString(),
+      };
+      await deps.queue.enqueue({
+        sessionId: `${connectionId}:${summary.id}`,
+        body,
+      });
+      enqueued += 1;
     }
-    const body: OrderWebhookMessage = {
-      schemaVersion: 1,
-      environment: deps.environment,
-      connectionId,
-      shopDomain: connection.shopifyStore,
-      topic: 'orders/updated',
-      orderGid: summary.id,
-      envelopeBlobUri: `catchup://dpi/${deps.environment}/${connectionId}/${encodeURIComponent(
-        summary.id,
-      )}/${now.toISOString()}`,
-      receivedAt: now.toISOString(),
-    };
-    await deps.queue.enqueue({
-      sessionId: `${connectionId}:${summary.id}`,
-      body,
-    });
-    enqueued += 1;
+
+    if (!page.hasNextPage || !page.endCursor) {
+      break;
+    }
+    after = page.endCursor;
   }
 
   // Advance the watermark. If we observed orders, use the latest updatedAt
@@ -169,8 +189,8 @@ async function pollOneConnection(
   // jump forward to `now - overlap` so we don't keep replaying the same
   // window indefinitely.
   const newCursor =
-    orders.length > 0
-      ? orders[orders.length - 1]!.updatedAt
+    lastUpdatedAt !== undefined
+      ? lastUpdatedAt
       : new Date(now.getTime() - config.overlapSecondsOnEmpty * 1000).toISOString();
   await watermarkStore.set({
     environment: deps.environment,
@@ -182,7 +202,7 @@ async function pollOneConnection(
   return {
     kind: 'polled',
     connectionId,
-    observed: orders.length,
+    observed,
     enqueued,
     fromCursor,
     newCursor,

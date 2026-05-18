@@ -59,23 +59,30 @@ export interface ShopifyGateway {
    *   - cap the result at `limit` (default 250, the GraphQL max page) and
    *     order ascending by `updatedAt` so the watermark advances
    *     monotonically;
+   *   - honor `after` as an opaque page cursor when present;
    *   - return only the minimum the handler needs — id (GID), updatedAt,
    *     and the topic-ish flavor — because the handler re-fetches the
    *     full order from `getOrder` anyway (brief invariant 3).
    *
-   * Returns a single page; the poller calls again with the next `since`
-   * if the page is full.
+   * Returns a single page with cursor info; the poller loops while
+   * `hasNextPage` is true.
    */
   listOrdersUpdatedSince(
     connection: Connection,
-    args: { since: string; limit?: number },
-  ): Promise<ReadonlyArray<OrderSummary>>;
+    args: { since: string; limit?: number; after?: string },
+  ): Promise<OrderSummaryPage>;
 }
 
 /** Minimum order shape the catch-up poller needs. */
 export interface OrderSummary {
   readonly id: string;
   readonly updatedAt: string;
+}
+
+export interface OrderSummaryPage {
+  readonly items: ReadonlyArray<OrderSummary>;
+  readonly hasNextPage: boolean;
+  readonly endCursor?: string;
 }
 
 /**
@@ -91,5 +98,26 @@ export class OrderNotFoundError extends Error {
     this.name = 'OrderNotFoundError';
     this.orderGid = orderGid;
     this.shopDomain = shopDomain;
+  }
+}
+
+/**
+ * Thrown when Shopify says the order exists but the requested sublists were
+ * truncated by the query limits (line items, shipping lines, or transactions).
+ * We park these orders rather than importing partial financial data.
+ */
+export class OrderTruncatedError extends Error {
+  readonly orderGid: string;
+  readonly shopDomain: string;
+  readonly truncatedFields: readonly string[];
+
+  constructor(orderGid: string, shopDomain: string, truncatedFields: readonly string[]) {
+    super(
+      `order '${orderGid}' on ${shopDomain} exceeds query limits for ${truncatedFields.join(', ')}`,
+    );
+    this.name = 'OrderTruncatedError';
+    this.orderGid = orderGid;
+    this.shopDomain = shopDomain;
+    this.truncatedFields = truncatedFields;
   }
 }

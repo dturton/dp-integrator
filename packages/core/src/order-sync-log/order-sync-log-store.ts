@@ -9,7 +9,7 @@ import type { Environment } from '../env.js';
  * succeeds. The handler uses an INSERT … ON CONFLICT DO UPDATE on the
  * unique (env, conn, gid) constraint so transitions don't leave stale rows.
  */
-export type OrderSyncLogStatus = 'imported' | 'parked' | 'ignored';
+export type OrderSyncLogStatus = 'imported' | 'parked' | 'ignored' | 'deferred';
 
 export interface OrderSyncLog {
   readonly id: string;
@@ -41,6 +41,7 @@ export interface OrderSyncLog {
   readonly parkStage?: string;
   readonly parkDetail?: string;
   readonly parkErrorClass?: string;
+  /** Eligibility reason for ignored/deferred outcomes. */
   readonly ignoredReason?: string;
 
   readonly syncedAt?: Date;
@@ -77,6 +78,7 @@ export interface OrderSyncLogInput {
   readonly parkStage?: string;
   readonly parkDetail?: string;
   readonly parkErrorClass?: string;
+  /** Eligibility reason for ignored/deferred outcomes. */
   readonly ignoredReason?: string;
 
   readonly syncedAt?: Date;

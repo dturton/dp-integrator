@@ -73,14 +73,14 @@ export interface ReplayDeps {
 }
 
 /**
- * Atomically un-claim a parked / pending xref row and republish the order
+ * Atomically un-claim a parked / pending / deferred xref row and republish the order
  * to the queue so the import pipeline runs again. Used by both the CLI
  * (`dpi replay <gid>`) and the REST admin endpoint.
  *
  * Behavior matrix:
  *   - xref.status='synced' + !force → `refused_already_synced` (no delete,
  *     no publish). Operator must pass `force` or fix NS first.
- *   - xref.status in {pending, error, ignored} → delete + publish; outcome
+ *   - xref.status in {pending, deferred, error, ignored} → delete + publish; outcome
  *     `replayed` with `previousStatus` set so the caller can report what
  *     was overwritten.
  *   - no xref row at all → publish only; outcome `replayed` with

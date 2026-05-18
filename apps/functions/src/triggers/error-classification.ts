@@ -1,6 +1,6 @@
 import type { ErrorClass } from '@dpi/core';
 import { mapNetSuiteError } from '@dpi/netsuite-client';
-import { OrderNotFoundError } from '@dpi/shopify-client';
+import { OrderNotFoundError, OrderTruncatedError } from '@dpi/shopify-client';
 
 /**
  * Map any error raised during the order-import pipeline to one of the brief's
@@ -25,6 +25,7 @@ import { OrderNotFoundError } from '@dpi/shopify-client';
 export function classifyHandlerError(err: unknown): ErrorClass {
   // Order-not-found from Shopify re-fetch (Slice E1) — permanent data error.
   if (err instanceof OrderNotFoundError) return 'data';
+  if (err instanceof OrderTruncatedError) return 'data';
 
   // NetSuite errors carry the most signal — let the dedicated mapper handle them.
   // mapNetSuiteError returns 'auth' / 'transient' / 'data' / 'unknown' already.

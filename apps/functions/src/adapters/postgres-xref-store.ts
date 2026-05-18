@@ -1,10 +1,12 @@
 import type pg from 'pg';
 import {
+  DEFAULT_XREF_CLAIM_CONFIG,
   dedupKey,
   type ClaimInput,
   type ClaimResult,
   type DedupKeyParts,
   type Environment,
+  type XrefClaimConfig,
   type XrefRow,
   type XrefStatus,
   type XrefStore,
@@ -22,7 +24,14 @@ import {
  * cannot resolve a prod NS internal id (brief invariant 4).
  */
 export class PostgresXrefStore implements XrefStore {
-  constructor(private readonly pool: pg.Pool) {}
+  private readonly claimLeaseMs: number;
+
+  constructor(
+    private readonly pool: pg.Pool,
+    config: Partial<XrefClaimConfig> = {},
+  ) {
+    this.claimLeaseMs = config.claimLeaseMs ?? DEFAULT_XREF_CLAIM_CONFIG.claimLeaseMs;
+  }
 
   async claim(input: ClaimInput): Promise<ClaimResult> {
     // Race window: two parallel handlers for the same dedup key both call
@@ -32,9 +41,9 @@ export class PostgresXrefStore implements XrefStore {
     const insertSql = `
       INSERT INTO entity_xref (
         environment, connection_id, entity_type, source_system, source_id,
-        target_system, target_id, target_external, source_hash, status
+        target_system, target_id, target_external, source_hash, status, claimed_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, 'pending')
+      VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, 'pending', NOW())
       ON CONFLICT (environment, connection_id, entity_type, source_system, source_id)
       DO NOTHING
       RETURNING *
@@ -68,7 +77,24 @@ export class PostgresXrefStore implements XrefStore {
         return { outcome: 'already_synced', row: existing };
       case 'ignored':
         return { outcome: 'ignored', row: existing };
+      case 'deferred': {
+        const reclaimed = await this.reclaim(input, `status = 'deferred'`);
+        if (reclaimed) return { outcome: 'claimed', row: reclaimed };
+        return { outcome: 'already_claimed', row: (await this.fetch(input)) ?? existing };
+      }
       case 'pending':
+        if (existing.claimedAt && Date.now() - existing.claimedAt.getTime() < this.claimLeaseMs) {
+          return { outcome: 'already_claimed', row: existing };
+        }
+        {
+          const reclaimed = await this.reclaim(
+            input,
+            `status = 'pending' AND (claimed_at IS NULL OR claimed_at <= NOW() - ($6 * INTERVAL '1 millisecond'))`,
+            [this.claimLeaseMs],
+          );
+          if (reclaimed) return { outcome: 'claimed', row: reclaimed };
+          return { outcome: 'already_claimed', row: (await this.fetch(input)) ?? existing };
+        }
       case 'error':
         return { outcome: 'already_claimed', row: existing };
     }
@@ -84,6 +110,7 @@ export class PostgresXrefStore implements XrefStore {
          SET target_id = $6,
              target_external = $7,
              status = 'synced',
+             claimed_at = NULL,
              last_synced_at = NOW(),
              updated_at = NOW()
        WHERE environment = $1
@@ -115,6 +142,7 @@ export class PostgresXrefStore implements XrefStore {
     const sql = `
       UPDATE entity_xref
          SET status = 'error',
+             claimed_at = NULL,
              source_hash = COALESCE($6, source_hash),
              updated_at = NOW()
        WHERE environment = $1
@@ -141,17 +169,49 @@ export class PostgresXrefStore implements XrefStore {
     return toXrefRow(row);
   }
 
+  async markDeferred(parts: DedupKeyParts, sourceHash?: string): Promise<XrefRow> {
+    const sql = `
+      INSERT INTO entity_xref (
+        environment, connection_id, entity_type, source_system, source_id,
+        target_system, target_id, target_external, source_hash, status, claimed_at
+      )
+      VALUES ($1, $2, $3, $4, $5, 'netsuite', NULL, '', $6, 'deferred', NULL)
+      ON CONFLICT (environment, connection_id, entity_type, source_system, source_id)
+      DO UPDATE SET
+        status = 'deferred',
+        claimed_at = NULL,
+        source_hash = COALESCE(EXCLUDED.source_hash, entity_xref.source_hash),
+        updated_at = NOW()
+      RETURNING *
+    `;
+    const r = await this.pool.query<XrefRowDb>(sql, [
+      parts.environment,
+      parts.connectionId,
+      parts.entityType,
+      parts.sourceSystem,
+      parts.sourceId,
+      sourceHash ?? null,
+    ]);
+    const row = r.rows[0];
+    if (!row) {
+      throw new Error(
+        `PostgresXrefStore.markDeferred: upsert returned no row for key ${dedupKey(parts)}`,
+      );
+    }
+    return toXrefRow(row);
+  }
+
   async markIgnored(parts: DedupKeyParts): Promise<XrefRow> {
     // Upsert — ignored is the only status reachable from "no row exists yet"
     // (eligibility predicate said no on the very first delivery).
     const sql = `
       INSERT INTO entity_xref (
         environment, connection_id, entity_type, source_system, source_id,
-        target_system, target_id, target_external, source_hash, status
+        target_system, target_id, target_external, source_hash, status, claimed_at
       )
-      VALUES ($1, $2, $3, $4, $5, 'netsuite', NULL, '', NULL, 'ignored')
+      VALUES ($1, $2, $3, $4, $5, 'netsuite', NULL, '', NULL, 'ignored', NULL)
       ON CONFLICT (environment, connection_id, entity_type, source_system, source_id)
-      DO UPDATE SET status = 'ignored', updated_at = NOW()
+      DO UPDATE SET status = 'ignored', claimed_at = NULL, updated_at = NOW()
       RETURNING *
     `;
     const r = await this.pool.query<XrefRowDb>(sql, [
@@ -213,6 +273,35 @@ export class PostgresXrefStore implements XrefStore {
     ]);
     return r.rows[0] ? toXrefRow(r.rows[0]) : undefined;
   }
+
+  private async reclaim(
+    parts: DedupKeyParts,
+    predicateSql: string,
+    extraParams: readonly unknown[] = [],
+  ): Promise<XrefRow | undefined> {
+    const sql = `
+      UPDATE entity_xref
+         SET status = 'pending',
+             claimed_at = NOW(),
+             updated_at = NOW()
+       WHERE environment = $1
+         AND connection_id = $2
+         AND entity_type = $3
+         AND source_system = $4
+         AND source_id = $5
+         AND (${predicateSql})
+       RETURNING *
+    `;
+    const r = await this.pool.query<XrefRowDb>(sql, [
+      parts.environment,
+      parts.connectionId,
+      parts.entityType,
+      parts.sourceSystem,
+      parts.sourceId,
+      ...extraParams,
+    ]);
+    return r.rows[0] ? toXrefRow(r.rows[0]) : undefined;
+  }
 }
 
 interface XrefRowDb {
@@ -226,6 +315,7 @@ interface XrefRowDb {
   target_external: string;
   source_hash: string | null;
   status: XrefStatus;
+  claimed_at: Date | null;
   last_synced_at: Date | null;
 }
 
@@ -241,6 +331,7 @@ function toXrefRow(row: XrefRowDb): XrefRow {
     targetExternal: row.target_external,
     sourceHash: row.source_hash,
     status: row.status,
+    claimedAt: row.claimed_at,
     lastSyncedAt: row.last_synced_at,
   };
 }

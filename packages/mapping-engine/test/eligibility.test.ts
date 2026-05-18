@@ -12,14 +12,16 @@ describe('checkEligibility', () => {
     const order = makeFakeOrder({ test: true });
     expect(checkEligibility(order, 'orders/create')).toEqual({
       eligible: false,
+      disposition: 'ignored',
       reason: 'test_order',
     });
   });
 
-  it('rejects fraud-hold orders', () => {
+  it('defers fraud-hold orders', () => {
     const order = makeFakeOrder({ fraudHold: true });
     expect(checkEligibility(order, 'orders/create')).toEqual({
       eligible: false,
+      disposition: 'deferred',
       reason: 'fraud_hold',
     });
   });
@@ -36,6 +38,7 @@ describe('checkEligibility', () => {
     const order = makeFakeOrder({ financialStatus: 'pending' });
     expect(checkEligibility(order, 'orders/create')).toMatchObject({
       eligible: false,
+      disposition: 'deferred',
       reason: 'pending_payment',
     });
   });
@@ -44,6 +47,7 @@ describe('checkEligibility', () => {
     const order = makeFakeOrder({ financialStatus: 'refunded' });
     expect(checkEligibility(order, 'orders/create')).toMatchObject({
       eligible: false,
+      disposition: 'deferred',
       reason: 'pending_payment',
     });
   });
@@ -52,6 +56,7 @@ describe('checkEligibility', () => {
     const order = makeFakeOrder({ lineItems: [] });
     expect(checkEligibility(order, 'orders/create')).toEqual({
       eligible: false,
+      disposition: 'ignored',
       reason: 'no_line_items',
     });
   });
@@ -60,7 +65,7 @@ describe('checkEligibility', () => {
     const order = makeFakeOrder();
     expect(
       checkEligibility(order, 'orders/updated', { allowedTopics: ['orders/create'] }),
-    ).toMatchObject({ eligible: false, reason: 'disallowed_topic' });
+    ).toMatchObject({ eligible: false, disposition: 'deferred', reason: 'disallowed_topic' });
     expect(
       checkEligibility(order, 'orders/create', { allowedTopics: ['orders/create'] }),
     ).toEqual({ eligible: true });

@@ -1,5 +1,9 @@
 import type { Connection } from '@dpi/core';
-import { OrderNotFoundError, type OrderSummary, type ShopifyGateway } from './gateway.js';
+import {
+  OrderNotFoundError,
+  type OrderSummaryPage,
+  type ShopifyGateway,
+} from './gateway.js';
 import type { ShopifyOrder } from './order.js';
 
 /**
@@ -68,8 +72,8 @@ export class FakeShopifyGateway implements ShopifyGateway {
 
   async listOrdersUpdatedSince(
     _connection: Connection,
-    args: { since: string; limit?: number },
-  ): Promise<ReadonlyArray<OrderSummary>> {
+    args: { since: string; limit?: number; after?: string },
+  ): Promise<OrderSummaryPage> {
     const limit = args.limit ?? 250;
     const sinceMs = Date.parse(args.since);
     if (Number.isNaN(sinceMs)) {
@@ -77,10 +81,17 @@ export class FakeShopifyGateway implements ShopifyGateway {
     }
     const matching = Array.from(this.orders.values())
       .filter((o) => Date.parse(o.updatedAt) >= sinceMs)
-      .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt))
-      .slice(0, limit)
+      .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
+    const start = args.after !== undefined ? Number(args.after) + 1 : 0;
+    const items = matching
+      .slice(start, start + limit)
       .map((o) => ({ id: o.id, updatedAt: o.updatedAt }));
-    return matching;
+    const endIndex = start + items.length - 1;
+    return {
+      items,
+      hasNextPage: start + limit < matching.length,
+      ...(items.length > 0 ? { endCursor: String(endIndex) } : {}),
+    };
   }
 }
 

@@ -142,7 +142,7 @@ describe('pollCatchup', () => {
     expect(queue.size()).toBe(0);
   });
 
-  it('re-enqueues orders whose xref is pending or error (handler will idempotently resolve)', async () => {
+  it('re-enqueues orders whose xref is pending or deferred', async () => {
     const { deps, shopify, xrefStore, queue } = build();
     shopify.seedOrder(makeFakeOrder({
       id: 'gid://shopify/Order/300',
@@ -164,12 +164,50 @@ describe('pollCatchup', () => {
       sourceSystem: 'shopify',
       sourceId: 'gid://shopify/Order/300',
     });
+    await xrefStore.markDeferred({
+      environment: 'dev',
+      connectionId: 'acme-us',
+      entityType: 'order',
+      sourceSystem: 'shopify',
+      sourceId: 'gid://shopify/Order/300',
+    });
 
     const outcome = await pollCatchup(deps, TEST_CFG);
     const r = outcome.perConnection[0]!;
     if (r.kind !== 'polled') throw new Error('expected polled');
     expect(r.enqueued).toBe(1);
     expect(queue.size()).toBe(1);
+  });
+
+  it('skips parked error rows until an operator replays them', async () => {
+    const { deps, shopify, xrefStore, queue } = build();
+    shopify.seedOrder(makeFakeOrder({
+      id: 'gid://shopify/Order/301',
+      updatedAt: '2026-05-17T19:55:00Z',
+    }));
+    await xrefStore.claim({
+      environment: 'dev',
+      connectionId: 'acme-us',
+      entityType: 'order',
+      sourceSystem: 'shopify',
+      sourceId: 'gid://shopify/Order/301',
+      targetSystem: 'netsuite',
+      targetExternal: 'gid://shopify/Order/301',
+    });
+    await xrefStore.recordFailure({
+      environment: 'dev',
+      connectionId: 'acme-us',
+      entityType: 'order',
+      sourceSystem: 'shopify',
+      sourceId: 'gid://shopify/Order/301',
+    });
+
+    const outcome = await pollCatchup(deps, TEST_CFG);
+    const r = outcome.perConnection[0]!;
+    if (r.kind !== 'polled') throw new Error('expected polled');
+    expect(r.observed).toBe(1);
+    expect(r.enqueued).toBe(0);
+    expect(queue.size()).toBe(0);
   });
 
   it('advances the watermark to now-overlap when zero orders matched', async () => {
@@ -259,5 +297,36 @@ describe('pollCatchup', () => {
     expect(r.observed).toBe(1);
     expect(r.fromCursor).toBe('2026-05-17T20:00:00Z');
     expect(r.newCursor).toBe('2026-05-17T20:15:00Z');
+  });
+
+  it('walks multiple Shopify pages in one run before advancing the watermark', async () => {
+    const cfg: CatchupConfig = { ...TEST_CFG, pageSize: 2 };
+    const { deps, shopify, queue, watermarkStore } = build({
+      now: new Date('2026-05-17T20:30:00Z'),
+    });
+    shopify.seedOrder(makeFakeOrder({
+      id: 'gid://shopify/Order/700',
+      updatedAt: '2026-05-17T20:01:00Z',
+    }));
+    shopify.seedOrder(makeFakeOrder({
+      id: 'gid://shopify/Order/701',
+      updatedAt: '2026-05-17T20:02:00Z',
+    }));
+    shopify.seedOrder(makeFakeOrder({
+      id: 'gid://shopify/Order/702',
+      updatedAt: '2026-05-17T20:03:00Z',
+    }));
+
+    const outcome = await pollCatchup(deps, cfg);
+    const r = outcome.perConnection[0]!;
+    if (r.kind !== 'polled') throw new Error('expected polled');
+    expect(r.observed).toBe(3);
+    expect(r.enqueued).toBe(3);
+    expect(queue.size()).toBe(3);
+    expect((await watermarkStore.get({
+      environment: 'dev',
+      connectionId: 'acme-us',
+      flow: CATCHUP_FLOW,
+    }))?.lastCursor).toBe('2026-05-17T20:03:00Z');
   });
 });

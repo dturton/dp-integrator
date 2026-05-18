@@ -17,20 +17,21 @@ import type { NetSuiteGateway } from '@dpi/netsuite-client';
  *   - IP allowlist (would show all fail with a specific NS error)
  *   - SDK-vs-Function-host quirk (would show specific call type failing)
  *
- * Authless on purpose — only exposed in dev for triage. Remove once NS
- * writes are stable.
+ * Function-key gated and opt-in via bootstrap. Read probes always run; the
+ * write probe is separately gated by `allowWrites`.
  */
 
 export interface NsDiagnosticDeps {
   readonly ns: NetSuiteGateway;
   readonly nsAccountId: string;
   readonly nsSubsidiary: string;
+  readonly allowWrites: boolean;
 }
 
 export function registerNsDiagnostic(getDeps: () => NsDiagnosticDeps): void {
   app.http('nsDiagnostic', {
     methods: ['GET'],
-    authLevel: 'anonymous',
+    authLevel: 'function',
     route: 'ns-diagnostic',
     handler: async (
       _request: HttpRequest,
@@ -67,32 +68,40 @@ export function registerNsDiagnostic(getDeps: () => NsDiagnosticDeps): void {
         });
       }
 
-      // Probe 3: write via upsertByExternalId — the path that's failing.
-      const externalId = `diag-${Date.now()}`;
-      try {
-        const r = await deps.ns.upsertByExternalId({
-          nsAccountId: deps.nsAccountId,
-          recordType: 'customer' as Parameters<NetSuiteGateway['upsertByExternalId']>[0]['recordType'],
-          externalId,
-          payload: {
-            isperson: true,
-            firstname: 'Diag',
-            lastname: 'Probe',
-            email: 'diagnostic-probe@example.com',
-            phone: '+15555550100',
-            subsidiary: deps.nsSubsidiary,
-          },
-        });
+      if (deps.allowWrites) {
+        // Probe 3: write via upsertByExternalId — the path that's failing.
+        const externalId = `diag-${Date.now()}`;
+        try {
+          const r = await deps.ns.upsertByExternalId({
+            nsAccountId: deps.nsAccountId,
+            recordType: 'customer' as Parameters<NetSuiteGateway['upsertByExternalId']>[0]['recordType'],
+            externalId,
+            payload: {
+              isperson: true,
+              firstname: 'Diag',
+              lastname: 'Probe',
+              email: 'diagnostic-probe@example.com',
+              phone: '+15555550100',
+              subsidiary: deps.nsSubsidiary,
+            },
+          });
+          probes.push({
+            name: 'write (upsertByExternalId customer)',
+            ok: true,
+            detail: `internalId=${r.internalId} created=${r.created}`,
+          });
+        } catch (err) {
+          probes.push({
+            name: 'write (upsertByExternalId customer)',
+            ok: false,
+            detail: errMsg(err),
+          });
+        }
+      } else {
         probes.push({
           name: 'write (upsertByExternalId customer)',
           ok: true,
-          detail: `internalId=${r.internalId} created=${r.created}`,
-        });
-      } catch (err) {
-        probes.push({
-          name: 'write (upsertByExternalId customer)',
-          ok: false,
-          detail: errMsg(err),
+          detail: 'skipped (ENABLE_NS_DIAGNOSTIC_WRITES!=true)',
         });
       }
 

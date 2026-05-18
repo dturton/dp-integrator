@@ -27,16 +27,33 @@ export interface Connection {
   readonly environment: Environment;
   readonly shopifyStore: string;
   /**
-   * SecretProvider ref for the Shopify Admin API access token (custom-app token used
-   * for GraphQL/REST calls). Separate from `shopifyWebhookSecretRef` — Shopify custom
-   * apps issue two distinct secrets.
+   * SecretProvider ref for a long-lived Shopify Admin API access token.
+   *
+   * When present, the Shopify client uses this token directly for GraphQL /
+   * REST calls. This is the simplest auth model for internal custom apps and
+   * remains supported as the fallback path even when client-credential
+   * exchange is also available.
    */
-  readonly shopifyAppTokenRef: string;
+  readonly shopifyAppTokenRef?: string;
+  /**
+   * Optional SecretProvider ref for the Shopify app's client id.
+   *
+   * When both `shopifyClientIdRef` and `shopifyClientSecretRef` are set, the
+   * Shopify client exchanges them for a short-lived access token via
+   * `ShopifyTokenService` instead of using `shopifyAppTokenRef` directly.
+   */
+  readonly shopifyClientIdRef?: string;
+  /**
+   * Optional SecretProvider ref for the Shopify app's client secret used by
+   * the client-credentials token exchange.
+   */
+  readonly shopifyClientSecretRef?: string;
   /**
    * SecretProvider ref for the Shopify webhook **shared secret** (API secret key from
    * the custom app's API credentials page) used to verify the
    * `X-Shopify-Hmac-Sha256` header on inbound webhooks. Distinct from
-   * `shopifyAppTokenRef` — a misconfiguration here parks all inbound deliveries as 401.
+   * `shopifyAppTokenRef` / the client-credential refs — a misconfiguration here
+   * rejects inbound deliveries as 401.
    */
   readonly shopifyWebhookSecretRef: string;
   readonly nsAccountId: string;
