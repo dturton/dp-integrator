@@ -35,7 +35,7 @@ param location string = 'eastus2'
 @description('Common tags for resource governance.')
 param tags object = {}
 
-@description('SKU tier. Standard is required for linked backends (which is how /api/ops/* reaches the Function App without exposing the function key to the browser). Free hosts only "managed functions" embedded in the SWA itself, which we deliberately don''t use here.')
+@description('SKU tier. Standard is required for linked backends — how /api/ops/* reaches the Function App without exposing the function key to the browser. Free hosts only managed functions embedded in the SWA itself, which we deliberately avoid.')
 @allowed([
   'Free'
   'Standard'
