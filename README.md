@@ -366,12 +366,12 @@ ships two views — Dashboard (status counts + recent activity) and Orders
 (paginated browser over `order_sync_log` with status filter + free-text
 search across order number / email / NS internal id).
 
-The API surface lives in the function app under `/api/admin/*`:
+The API surface lives in the function app under `/api/ops/*`:
 
 | Route | Returns |
 |---|---|
-| `GET /api/admin/status` | counts by status, last-24h windows, 10 most recent rows, drift summary |
-| `GET /api/admin/orders` | paginated rows (`limit`/`offset`) with optional `status`, `connection`, `search` filters |
+| `GET /api/ops/status` | counts by status, last-24h windows, 10 most recent rows, drift summary |
+| `GET /api/ops/orders` | paginated rows (`limit`/`offset`) with optional `status`, `connection`, `search` filters |
 
 ### Local dev
 
@@ -384,7 +384,7 @@ export VITE_DEV_FUNCTIONS_KEY=$(az functionapp keys list \
   --name dpi-func-dev-auwpabjrr5flu -g rg-dpi-dev \
   --query functionKeys.default -o tsv)
 
-# Dev server (proxies /api/admin/* to the deployed dev function app)
+# Dev server (proxies /api/ops/* to the deployed dev function app)
 pnpm --filter @dpi/admin-ui dev
 # → http://localhost:5173
 ```
@@ -429,12 +429,12 @@ but future RBAC checks land there).
 
 | View | Path | Endpoint |
 |---|---|---|
-| Dashboard | `/` | `GET /api/admin/status` |
-| Orders browser | `/orders` | `GET /api/admin/orders` |
-| Order detail | `/orders/:id` | `GET /api/admin/orders/detail` |
-| Parked queue | `/parked` | `GET /api/admin/orders?status=parked` |
-| Reconciliation | `/reconciliation` | `GET /api/admin/reconciliation`, `POST /api/admin/reconcile/run` |
-| Connections | `/connections` | `GET /api/admin/connections` |
+| Dashboard | `/` | `GET /api/ops/status` |
+| Orders browser | `/orders` | `GET /api/ops/orders` |
+| Order detail | `/orders/:id` | `GET /api/ops/orders/detail` |
+| Parked queue | `/parked` | `GET /api/ops/orders?status=parked` |
+| Reconciliation | `/reconciliation` | `GET /api/ops/reconciliation`, `POST /api/ops/reconcile/run` |
+| Connections | `/connections` | `GET /api/ops/connections` |
 
 Order detail + Parked both expose **Replay** buttons (POST to
 `/api/ops/replay`); Parked supports bulk-select. Reconciliation has a

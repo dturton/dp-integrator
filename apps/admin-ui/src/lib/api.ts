@@ -1,7 +1,7 @@
 /**
  * Tiny fetch wrapper for the admin API.
  *
- * The UI always issues same-origin requests to `/api/admin/*`. In dev, the
+ * The UI always issues same-origin requests to `/api/ops/*`. In dev, the
  * Vite proxy (vite.config.ts) forwards them to the deployed function app
  * with the function-key header attached. In prod (Static Web Apps), the
  * SWA platform forwards to the linked function app and adds the
@@ -200,7 +200,7 @@ export interface ReconcileRunResult {
 }
 
 export const api = {
-  status: (): Promise<AdminStatusResponse> => get('/api/admin/status'),
+  status: (): Promise<AdminStatusResponse> => get('/api/ops/status'),
   orders: (q: OrdersQuery = {}): Promise<AdminOrdersResponse> => {
     const params = new URLSearchParams();
     if (q.limit !== undefined) params.set('limit', String(q.limit));
@@ -209,11 +209,11 @@ export const api = {
     if (q.status) params.set('status', q.status);
     if (q.search) params.set('search', q.search);
     const qs = params.toString();
-    return get<AdminOrdersResponse>(`/api/admin/orders${qs ? `?${qs}` : ''}`);
+    return get<AdminOrdersResponse>(`/api/ops/orders${qs ? `?${qs}` : ''}`);
   },
   orderDetail: (connectionId: string, orderId: string): Promise<OrderDetailResponse> => {
     const params = new URLSearchParams({ connection: connectionId, orderId });
-    return get<OrderDetailResponse>(`/api/admin/orders/detail?${params.toString()}`);
+    return get<OrderDetailResponse>(`/api/ops/orders/detail?${params.toString()}`);
   },
   reconciliation: (opts: { limit?: number; connection?: string; driftOnly?: boolean } = {}): Promise<ReconciliationResponse> => {
     const params = new URLSearchParams();
@@ -221,12 +221,12 @@ export const api = {
     if (opts.connection) params.set('connection', opts.connection);
     if (opts.driftOnly) params.set('drift', 'true');
     const qs = params.toString();
-    return get<ReconciliationResponse>(`/api/admin/reconciliation${qs ? `?${qs}` : ''}`);
+    return get<ReconciliationResponse>(`/api/ops/reconciliation${qs ? `?${qs}` : ''}`);
   },
   replay: (connectionId: string, orderGid: string, force = false): Promise<ReplayResponse> => {
     return postJson<ReplayResponse>('/api/ops/replay', { connectionId, orderGid, force });
   },
-  connections: (): Promise<ConnectionsResponse> => get('/api/admin/connections'),
+  connections: (): Promise<ConnectionsResponse> => get('/api/ops/connections'),
   reconcileRun: (daysBack = 1): Promise<ReconcileRunResult> =>
-    postJson<ReconcileRunResult>('/api/admin/reconcile/run', { daysBack }),
+    postJson<ReconcileRunResult>('/api/ops/reconcile/run', { daysBack }),
 };

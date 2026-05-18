@@ -501,7 +501,7 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
   app.http('adminStatus', {
     methods: ['GET'],
     authLevel: 'function',
-    route: 'admin/status',
+    route: 'ops/status',
     handler: async (
       _request: HttpRequest,
       context: InvocationContext,
@@ -518,7 +518,7 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
   app.http('adminOrders', {
     methods: ['GET'],
     authLevel: 'function',
-    route: 'admin/orders',
+    route: 'ops/orders',
     handler: async (
       request: HttpRequest,
       context: InvocationContext,
@@ -536,7 +536,7 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
   app.http('adminOrderDetail', {
     methods: ['GET'],
     authLevel: 'function',
-    route: 'admin/orders/detail',
+    route: 'ops/orders/detail',
     handler: async (
       request: HttpRequest,
       context: InvocationContext,
@@ -554,7 +554,7 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
   app.http('adminReconciliation', {
     methods: ['GET'],
     authLevel: 'function',
-    route: 'admin/reconciliation',
+    route: 'ops/reconciliation',
     handler: async (
       request: HttpRequest,
       context: InvocationContext,
@@ -572,7 +572,7 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
   app.http('adminConnections', {
     methods: ['GET'],
     authLevel: 'function',
-    route: 'admin/connections',
+    route: 'ops/connections',
     handler: async (
       _request: HttpRequest,
       context: InvocationContext,
@@ -589,7 +589,7 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
   app.http('adminReconcileRun', {
     methods: ['POST'],
     authLevel: 'function',
-    route: 'admin/reconcile/run',
+    route: 'ops/reconcile/run',
     handler: async (
       request: HttpRequest,
       context: InvocationContext,

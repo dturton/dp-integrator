@@ -6,12 +6,12 @@ import path from 'node:path';
  * Vite config for the dpi admin UI.
  *
  * Dev mode: `pnpm dev` runs the Vite dev server with a proxy that forwards
- * `/api/admin/*` to the deployed dev function app. Set the target via
+ * `/api/ops/*` to the deployed dev function app. Set the target via
  * `VITE_DEV_API_TARGET` (default: dpi-func-dev). That way local UI dev hits
  * real data without needing to run the function host locally.
  *
  * Prod: built static bundle is served by Azure Static Web Apps; the linked
- * Function App handles `/api/admin/*` natively (no proxy needed).
+ * Function App handles `/api/ops/*` natively (no proxy needed).
  */
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
@@ -23,7 +23,7 @@ export default defineConfig(({ mode }) => ({
   server: {
     port: 5173,
     proxy: {
-      '/api/admin': {
+      '/api/ops': {
         target: process.env['VITE_DEV_API_TARGET'] ?? 'https://dpi-func-dev-auwpabjrr5flu.azurewebsites.net',
         changeOrigin: true,
         secure: true,
