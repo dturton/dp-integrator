@@ -74,7 +74,23 @@ registerOrderImportHandler(() => {
 registerAdminApi(() => {
   const ctx = getAppContext();
   if (!ctx.pgPool) return undefined;
-  return { environment: ctx.environment, pgPool: ctx.pgPool };
+  return {
+    environment: ctx.environment,
+    pgPool: ctx.pgPool,
+    connections: ctx.connections,
+    ...(ctx.orderSyncLog && ctx.reconciliationStore
+      ? {
+          reconciliation: {
+            environment: ctx.environment,
+            connections: ctx.connections,
+            shopify: ctx.shopify,
+            orderSyncLog: ctx.orderSyncLog,
+            reconciliationStore: ctx.reconciliationStore,
+            telemetry: getTelemetry(),
+          },
+        }
+      : {}),
+  };
 });
 
 // M2-A: REST admin replay surface. Reuses the AppContext's xrefStore + the

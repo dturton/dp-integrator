@@ -5,7 +5,11 @@ import {
   type InvocationContext,
 } from '@azure/functions';
 import type pg from 'pg';
-import type { Environment } from '@dpi/core';
+import type { Connection, ConnectionsRepo, Environment } from '@dpi/core';
+import {
+  runReconciliation,
+  type ReconciliationDeps,
+} from './reconciliation-sweep.js';
 
 /**
  * Admin API surface backing the dpi admin UI (apps/admin-ui).
@@ -28,6 +32,13 @@ import type { Environment } from '@dpi/core';
 export interface AdminApiDeps {
   readonly environment: Environment;
   readonly pgPool: pg.Pool;
+  /** For /api/admin/connections — exposed read-only. */
+  readonly connections: ConnectionsRepo;
+  /**
+   * For /api/admin/reconcile/run — runs the sweep handler on-demand.
+   * Optional so a Slice-A-only env can boot without it.
+   */
+  readonly reconciliation?: ReconciliationDeps;
 }
 
 interface RecentOrderRow {
@@ -112,6 +123,76 @@ export async function handleAdminStatus(deps: AdminApiDeps): Promise<HttpRespons
         snapshotsWithDrift: Number(driftRow?.count ?? '0'),
         mostRecentBusinessDate: driftRow?.most_recent ?? null,
       },
+    },
+  };
+}
+
+export async function handleAdminConnections(deps: AdminApiDeps): Promise<HttpResponseInit> {
+  const list = await deps.connections.listEnabled(deps.environment);
+  // Strip secret refs from the response — refs are not secrets, but exposing
+  // them on a UI surface is unnecessary detail. Operators have CLI access if
+  // they need to inspect the refs.
+  const safeRows = list.map((c: Connection) => ({
+    connectionId: c.connectionId,
+    environment: c.environment,
+    shopifyStore: c.shopifyStore,
+    nsAccountId: c.nsAccountId,
+    nsSubsidiary: c.nsSubsidiary,
+    nsLocation: c.nsLocation ?? null,
+    baseCurrency: c.baseCurrency,
+    taxEngine: c.taxEngine,
+    orderTarget: c.orderTarget,
+    mapVersion: c.mapVersion,
+    enabled: c.enabled,
+    defaultShipItemId: c.defaultShipItemId ?? null,
+    defaultDiscountItemId: c.defaultDiscountItemId ?? null,
+    writeTagsOnImport: c.writeTagsOnImport ?? false,
+    extraOrderHeaderMappingsCount: c.extraOrderHeaderMappings?.length ?? 0,
+  }));
+  return { status: 200, jsonBody: { rows: safeRows } };
+}
+
+export async function handleAdminReconcileRun(
+  deps: AdminApiDeps,
+  body: string,
+): Promise<HttpResponseInit> {
+  if (!deps.reconciliation) {
+    return { status: 503, jsonBody: { ok: false, reason: 'not_ready' } };
+  }
+  let parsed: { daysBack?: number } = {};
+  if (body) {
+    try {
+      parsed = JSON.parse(body) as { daysBack?: number };
+    } catch {
+      // Empty / malformed body → use defaults (most callers POST {} or nothing).
+    }
+  }
+  const daysBack = Math.max(1, Math.min(7, Number(parsed.daysBack ?? 1)));
+  const outcome = await runReconciliation(deps.reconciliation, {
+    schedule: '',
+    daysBack,
+    totalToleranceAmount: 0.05,
+  });
+  return {
+    status: 200,
+    jsonBody: {
+      ok: true,
+      perConnection: outcome.perConnection.map((r) => ({
+        connectionId: r.connectionId,
+        businessDate: r.businessDate,
+        drift: r.drift,
+        skipped: r.skipped ?? null,
+        snapshot:
+          r.snapshot !== undefined
+            ? {
+                shopifyOrderCount: r.snapshot.shopifyOrderCount,
+                nsTxnCount: r.snapshot.nsTxnCount,
+                shopifyTotal: r.snapshot.shopifyTotal,
+                nsTotal: r.snapshot.nsTotal,
+                discrepancy: r.snapshot.discrepancy,
+              }
+            : null,
+      })),
     },
   };
 }
@@ -485,6 +566,41 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
       }
       const url = new URL(request.url);
       return handleAdminReconciliation(deps, url.searchParams);
+    },
+  });
+
+  app.http('adminConnections', {
+    methods: ['GET'],
+    authLevel: 'function',
+    route: 'admin/connections',
+    handler: async (
+      _request: HttpRequest,
+      context: InvocationContext,
+    ): Promise<HttpResponseInit> => {
+      const deps = getDeps();
+      if (!deps) {
+        context.log('adminConnections not_ready');
+        return { status: 503, jsonBody: { ok: false, reason: 'not_ready' } };
+      }
+      return handleAdminConnections(deps);
+    },
+  });
+
+  app.http('adminReconcileRun', {
+    methods: ['POST'],
+    authLevel: 'function',
+    route: 'admin/reconcile/run',
+    handler: async (
+      request: HttpRequest,
+      context: InvocationContext,
+    ): Promise<HttpResponseInit> => {
+      const deps = getDeps();
+      if (!deps) {
+        context.log('adminReconcileRun not_ready');
+        return { status: 503, jsonBody: { ok: false, reason: 'not_ready' } };
+      }
+      const body = await request.text();
+      return handleAdminReconcileRun(deps, body);
     },
   });
 }

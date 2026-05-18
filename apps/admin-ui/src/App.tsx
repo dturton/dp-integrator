@@ -5,6 +5,7 @@ import { Orders } from '@/routes/Orders';
 import { OrderDetail } from '@/routes/OrderDetail';
 import { Parked } from '@/routes/Parked';
 import { Reconciliation } from '@/routes/Reconciliation';
+import { Connections } from '@/routes/Connections';
 
 export function App(): React.ReactElement {
   return (
@@ -16,6 +17,7 @@ export function App(): React.ReactElement {
           <Route path="/orders/:orderId" element={<OrderDetail />} />
           <Route path="/parked" element={<Parked />} />
           <Route path="/reconciliation" element={<Reconciliation />} />
+          <Route path="/connections" element={<Connections />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

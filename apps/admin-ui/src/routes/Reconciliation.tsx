@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Play } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api, ApiError, type ReconciliationResponse, type ReconciliationRow } from '@/lib/api';
+import { cn } from '@/lib/utils';
 
 /**
  * Reconciliation snapshots view (M3-B). Daily Shopify-vs-dpi-ledger
@@ -15,6 +16,9 @@ export function Reconciliation(): React.ReactElement {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [driftOnly, setDriftOnly] = useState(false);
+  const [runBusy, setRunBusy] = useState(false);
+  const [runMessage, setRunMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,16 +43,63 @@ export function Reconciliation(): React.ReactElement {
     return (): void => {
       cancelled = true;
     };
-  }, [driftOnly]);
+  }, [driftOnly, refreshKey]);
+
+  async function handleRun(): Promise<void> {
+    setRunBusy(true);
+    setRunMessage(null);
+    try {
+      const result = await api.reconcileRun(1);
+      const drift = result.perConnection.filter((r) => r.drift).length;
+      const ok = result.perConnection.length - drift;
+      setRunMessage({
+        kind: drift > 0 ? 'err' : 'ok',
+        text: `Sweep complete — ${ok} clean, ${drift} drift across ${result.perConnection.length} (connection × day) tuples.`,
+      });
+      // Refresh the snapshot list.
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setRunMessage({
+        kind: 'err',
+        text: e instanceof Error ? e.message : 'sweep failed',
+      });
+    } finally {
+      setRunBusy(false);
+    }
+  }
 
   return (
     <div className="space-y-6 p-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Reconciliation</h1>
-        <p className="text-sm text-muted-foreground">
-          Daily Shopify vs dpi ledger comparison. Drift rows show count + total deltas.
-        </p>
+      <header className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">Reconciliation</h1>
+          <p className="text-sm text-muted-foreground">
+            Daily Shopify vs dpi ledger comparison. Drift rows show count + total deltas.
+          </p>
+        </div>
+        <Button onClick={handleRun} disabled={runBusy} size="sm">
+          <Play className={cn('h-3.5 w-3.5', runBusy && 'animate-pulse')} />
+          Run now
+        </Button>
       </header>
+
+      {runMessage && (
+        <div
+          className={cn(
+            'flex items-center gap-2 rounded-md border px-3 py-2 text-sm',
+            runMessage.kind === 'ok'
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+              : 'border-destructive/50 bg-destructive/5 text-destructive',
+          )}
+        >
+          {runMessage.kind === 'ok' ? (
+            <CheckCircle2 className="h-4 w-4" />
+          ) : (
+            <AlertTriangle className="h-4 w-4" />
+          )}
+          {runMessage.text}
+        </div>
+      )}
 
       <Card>
         <CardHeader className="space-y-3">

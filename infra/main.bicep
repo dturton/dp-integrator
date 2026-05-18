@@ -141,6 +141,17 @@ module appRoles './modules/role-assignments.bicep' = {
   }
 }
 
+module adminUi './modules/static-web-app.bicep' = {
+  scope: rg
+  name: 'admin-ui'
+  params: {
+    namePrefix: namePrefix
+    environmentName: environmentName
+    location: location
+    tags: commonTags
+  }
+}
+
 output functionAppName string = functionApp.outputs.functionAppName
 output functionAppPrincipalId string = functionApp.outputs.principalId
 output keyVaultUri string = keyVault.outputs.vaultUri
@@ -153,3 +164,6 @@ output storageAccountName string = functionApp.outputs.storageAccountName
 output storageBlobEndpoint string = functionApp.outputs.storageBlobEndpoint
 output inboundContainerName string = functionApp.outputs.inboundContainerName
 output webhookUrl string = 'https://${functionApp.outputs.defaultHostName}/api/webhooks/shopify/orders'
+output adminUiHostname string = adminUi.outputs.defaultHostname
+output adminUiResourceId string = adminUi.outputs.staticWebAppId
+output adminUiName string = adminUi.outputs.staticWebAppName

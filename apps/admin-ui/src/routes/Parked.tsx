@@ -23,6 +23,56 @@ export function Parked(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [replayBusyGid, setReplayBusyGid] = useState<string | null>(null);
   const [replayMessage, setReplayMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  function rowKey(row: RecentOrderRow): string {
+    return `${row.connectionId}:${row.shopifyOrderId}`;
+  }
+
+  function toggleRow(row: RecentOrderRow): void {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const k = rowKey(row);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  }
+
+  function toggleAll(): void {
+    setSelected((prev) => {
+      if (prev.size === rows.length) return new Set();
+      return new Set(rows.map(rowKey));
+    });
+  }
+
+  async function handleBulkReplay(): Promise<void> {
+    if (selected.size === 0) return;
+    setBulkBusy(true);
+    setReplayMessage(null);
+    const targets = rows.filter((r) => selected.has(rowKey(r)));
+    let ok = 0;
+    let fail = 0;
+    // Serialize so we don't burst NS / SB; small sets, slow path is fine.
+    for (const row of targets) {
+      try {
+        const gid = `gid://shopify/Order/${row.shopifyOrderId}`;
+        const result = await api.replay(row.connectionId, gid);
+        if (result.outcome === 'replayed') ok += 1;
+        else fail += 1;
+      } catch {
+        fail += 1;
+      }
+    }
+    setBulkBusy(false);
+    setSelected(new Set());
+    setReplayMessage({
+      kind: fail === 0 ? 'ok' : 'err',
+      text: `Bulk replay: ${ok} ok, ${fail} failed across ${targets.length} orders`,
+    });
+    setTimeout(() => load(), 1500);
+  }
 
   const load = useCallback(() => {
     let cancelled = false;
@@ -113,13 +163,21 @@ export function Parked(): React.ReactElement {
       )}
 
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            {total > 0 ? `${total.toLocaleString()} parked` : 'No parked orders'}
-          </CardTitle>
-          <CardDescription>
-            Each row links to the full order detail with the SB attempt timeline.
-          </CardDescription>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle className="text-base">
+              {total > 0 ? `${total.toLocaleString()} parked` : 'No parked orders'}
+            </CardTitle>
+            <CardDescription>
+              Each row links to the full order detail with the SB attempt timeline.
+            </CardDescription>
+          </div>
+          {selected.size > 0 && (
+            <Button onClick={handleBulkReplay} disabled={bulkBusy} size="sm">
+              <RefreshCw className={cn('h-3.5 w-3.5', bulkBusy && 'animate-spin')} />
+              Replay selected ({selected.size})
+            </Button>
+          )}
         </CardHeader>
         <CardContent className="space-y-3">
           {error && (
@@ -130,6 +188,14 @@ export function Parked(): React.ReactElement {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-8">
+                  <input
+                    type="checkbox"
+                    aria-label="select all"
+                    checked={rows.length > 0 && selected.size === rows.length}
+                    onChange={toggleAll}
+                  />
+                </TableHead>
                 <TableHead className="w-32">Order</TableHead>
                 <TableHead className="w-32">Connection</TableHead>
                 <TableHead>Customer</TableHead>
@@ -141,14 +207,14 @@ export function Parked(): React.ReactElement {
             <TableBody>
               {loading && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground">
                     Loading…
                   </TableCell>
                 </TableRow>
               )}
               {!loading && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground">
                     🎉 nothing parked.
                   </TableCell>
                 </TableRow>
@@ -156,8 +222,18 @@ export function Parked(): React.ReactElement {
               {rows.map((row) => {
                 const gid = `gid://shopify/Order/${row.shopifyOrderId}`;
                 const busy = replayBusyGid === gid;
+                const key = rowKey(row);
+                const isSelected = selected.has(key);
                 return (
-                  <TableRow key={`${row.connectionId}:${row.shopifyOrderId}`}>
+                  <TableRow key={key} data-state={isSelected ? 'selected' : undefined}>
+                    <TableCell>
+                      <input
+                        type="checkbox"
+                        aria-label={`select ${row.shopifyOrderName ?? row.shopifyOrderId}`}
+                        checked={isSelected}
+                        onChange={() => toggleRow(row)}
+                      />
+                    </TableCell>
                     <TableCell className="font-mono text-xs">
                       <Link
                         to={`/orders/${row.shopifyOrderId}?connection=${encodeURIComponent(row.connectionId)}`}

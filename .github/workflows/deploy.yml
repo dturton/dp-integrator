@@ -58,8 +58,10 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm typecheck
+          pnpm --filter @dpi/admin-ui typecheck
           pnpm test
           pnpm build
+          pnpm --filter @dpi/admin-ui build
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -137,6 +139,47 @@ jobs:
           package: app-package.zip
           sku: flexconsumption
 
+      - name: Resolve admin UI SWA + link to function backend
+        id: swa
+        run: |
+          set -euo pipefail
+          RG="rg-dpi-${{ github.event.inputs.environment }}"
+          SWA_NAME=$(az staticwebapp list --resource-group "$RG" --query '[0].name' -o tsv)
+          if [ -z "$SWA_NAME" ]; then
+            echo "::warning::No Static Web App found in $RG — skip admin-ui deploy. Run `make infra-deploy` to provision."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          SWA_HOST=$(az staticwebapp show --name "$SWA_NAME" --resource-group "$RG" --query defaultHostname -o tsv)
+          # Idempotent: linking an already-linked backend is a no-op except for
+          # the env arg, which the API also tolerates. Surfaces /api/* from the
+          # linked function app to the SWA's domain.
+          FUNCTION_APP="${{ steps.bicep.outputs.function_app || steps.lookup.outputs.function_app }}"
+          FUNCTION_APP_ID=$(az functionapp show --name "$FUNCTION_APP" --resource-group "$RG" --query id -o tsv)
+          az staticwebapp backends link \
+            --name "$SWA_NAME" --resource-group "$RG" \
+            --backend-resource-id "$FUNCTION_APP_ID" \
+            --backend-region eastus2 \
+            2>/dev/null || echo "::notice::backend link already in place (or replaced)"
+          DEPLOY_TOKEN=$(az staticwebapp secrets list --name "$SWA_NAME" --resource-group "$RG" --query properties.apiKey -o tsv)
+          echo "swa_name=$SWA_NAME"  >> "$GITHUB_OUTPUT"
+          echo "swa_host=$SWA_HOST"  >> "$GITHUB_OUTPUT"
+          echo "deploy_token=$DEPLOY_TOKEN" >> "$GITHUB_OUTPUT"
+          echo "::add-mask::$DEPLOY_TOKEN"
+          echo "::notice::Admin UI → https://$SWA_HOST"
+
+      - name: Deploy admin UI to Static Web Apps
+        if: ${{ steps.swa.outputs.skip != 'true' }}
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa.outputs.deploy_token }}
+          action: upload
+          app_location: 'apps/admin-ui/dist'
+          api_location: ''
+          output_location: ''
+          skip_app_build: true
+          skip_api_build: true
+
       - name: Summary
         run: |
           {
@@ -146,5 +189,8 @@ jobs:
             echo "- Function App: \`${{ steps.bicep.outputs.function_app || steps.lookup.outputs.function_app }}\`"
             if [ -n "${{ steps.bicep.outputs.webhook_url || '' }}" ]; then
               echo "- Webhook URL: ${{ steps.bicep.outputs.webhook_url }}"
+            fi
+            if [ -n "${{ steps.swa.outputs.swa_host || '' }}" ]; then
+              echo "- Admin UI: https://${{ steps.swa.outputs.swa_host }}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

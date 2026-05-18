@@ -160,6 +160,45 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return json;
 }
 
+export interface ConnectionRow {
+  readonly connectionId: string;
+  readonly environment: string;
+  readonly shopifyStore: string;
+  readonly nsAccountId: string;
+  readonly nsSubsidiary: string;
+  readonly nsLocation: string | null;
+  readonly baseCurrency: string;
+  readonly taxEngine: 'suitetax' | 'legacy';
+  readonly orderTarget: 'sales_order' | 'cash_sale';
+  readonly mapVersion: string;
+  readonly enabled: boolean;
+  readonly defaultShipItemId: string | null;
+  readonly defaultDiscountItemId: string | null;
+  readonly writeTagsOnImport: boolean;
+  readonly extraOrderHeaderMappingsCount: number;
+}
+
+export interface ConnectionsResponse {
+  readonly rows: ReadonlyArray<ConnectionRow>;
+}
+
+export interface ReconcileRunResult {
+  readonly ok: boolean;
+  readonly perConnection: ReadonlyArray<{
+    readonly connectionId: string;
+    readonly businessDate: string;
+    readonly drift: boolean;
+    readonly skipped: string | null;
+    readonly snapshot: {
+      readonly shopifyOrderCount: number;
+      readonly nsTxnCount: number;
+      readonly shopifyTotal: string;
+      readonly nsTotal: string;
+      readonly discrepancy: Record<string, unknown> | null;
+    } | null;
+  }>;
+}
+
 export const api = {
   status: (): Promise<AdminStatusResponse> => get('/api/admin/status'),
   orders: (q: OrdersQuery = {}): Promise<AdminOrdersResponse> => {
@@ -187,4 +226,7 @@ export const api = {
   replay: (connectionId: string, orderGid: string, force = false): Promise<ReplayResponse> => {
     return postJson<ReplayResponse>('/api/ops/replay', { connectionId, orderGid, force });
   },
+  connections: (): Promise<ConnectionsResponse> => get('/api/admin/connections'),
+  reconcileRun: (daysBack = 1): Promise<ReconcileRunResult> =>
+    postJson<ReconcileRunResult>('/api/admin/reconcile/run', { daysBack }),
 };
