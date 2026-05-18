@@ -158,6 +158,12 @@ function coerceConnection(value: unknown, idx: number): Connection {
       ? undefined
       : String(defaultShipItemIdRaw);
 
+  const defaultItemIdRaw = v['defaultItemId'];
+  const defaultItemId =
+    defaultItemIdRaw === undefined || defaultItemIdRaw === null
+      ? undefined
+      : String(defaultItemIdRaw);
+
   const defaultDiscountItemIdRaw = v['defaultDiscountItemId'];
   const defaultDiscountItemId =
     defaultDiscountItemIdRaw === undefined || defaultDiscountItemIdRaw === null
@@ -186,6 +192,7 @@ function coerceConnection(value: unknown, idx: number): Connection {
     enabled,
     ...(extraOrderHeaderMappings !== undefined ? { extraOrderHeaderMappings } : {}),
     ...(defaultShipItemId !== undefined ? { defaultShipItemId } : {}),
+    ...(defaultItemId !== undefined ? { defaultItemId } : {}),
     ...(defaultDiscountItemId !== undefined ? { defaultDiscountItemId } : {}),
     ...(writeTagsOnImport !== undefined ? { writeTagsOnImport } : {}),
   };

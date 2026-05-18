@@ -74,6 +74,16 @@ export interface Connection {
    */
   readonly defaultShipItemId?: string;
   /**
+   * NS internal id of a generic catch-all item used when a Shopify line's SKU
+   * has no matching NS item record. Without this set, the item resolver parks
+   * the order with `unmapped_construct` (brief invariant 2: "park, don't
+   * guess"). Connections that prefer to land every order — accepting that
+   * unmapped SKUs collapse onto a single "Shopify Item" placeholder for
+   * later cleanup — set this to that item's NS internal id. Only applies to
+   * the order-line sublist; shipping lines keep using `defaultShipItemId`.
+   */
+  readonly defaultItemId?: string;
+  /**
    * NS internal id of the Discount item (`itemtype=Discount`) used to land
    * Shopify order-level discounts on NS sales orders. When `order.totalDiscounts`
    * is non-zero, the payload builder emits `discountItem: <this>` plus
