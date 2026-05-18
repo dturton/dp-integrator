@@ -99,10 +99,12 @@ function buildCustomerPayload(
     payload['companyname'] = companyName;
   }
   if (c.email) payload['email'] = c.email;
-  // Some NS accounts (and our dev sandbox) require Phone on customer create.
-  // Shopify keeps the phone on the default address rather than the customer
-  // record itself; fall through to it when present.
-  const phone = c.defaultAddress?.phone;
+  // NS requires at least one of Email/Phone on customer create. Shopify keeps
+  // phones on addresses, not the customer record; try the customer's default
+  // address first, then the order's shipping/billing addresses as a last
+  // resort so we don't 400 when the customer record itself lacks a phone.
+  const phone =
+    c.defaultAddress?.phone ?? orderAddresses.shipping?.phone ?? orderAddresses.billing?.phone;
   if (phone) payload['phone'] = phone;
 
   const addressbook = buildAddressbook(orderAddresses);
