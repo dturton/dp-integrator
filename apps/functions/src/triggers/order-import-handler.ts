@@ -230,7 +230,11 @@ export async function handleOrderMessage(
     //    NS internal ids via the gateway's cached SuiteQL lookup. Unmapped
     //    items park the order so operators can register the missing item in
     //    NS (or fix the source) instead of silently failing at NS write.
-    const resolved = await resolveItemReferences(balancedPayload, deps.ns, connection.nsAccountId);
+    const resolved = await resolveItemReferences(balancedPayload, deps.ns, connection.nsAccountId, {
+      ...(connection.defaultItemId !== undefined
+        ? { fallbackItemInternalId: connection.defaultItemId }
+        : {}),
+    });
     if (!resolved.ok) {
       return parkOutcome(deps, dedupKey, connection, msg, {
         stage: 'item_resolution',

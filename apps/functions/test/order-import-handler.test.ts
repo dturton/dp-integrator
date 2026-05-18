@@ -317,6 +317,29 @@ describe('handleOrderMessage — Slice D5 full pipeline', () => {
     expect(ns2.getRecords(acme.nsAccountId, 'salesorder' as never).size).toBe(0);
   });
 
+  it('imports (not parks) when a SKU misses but connection.defaultItemId is set', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const connWithFallback: Connection = { ...acme, defaultItemId: '6542' };
+    const { deps, ns } = buildDeps({ order, connections: [connWithFallback] });
+    // Drop the WIDGET-1 seed so the SKU misses; the fallback should pick it up.
+    const ns2 = new (ns.constructor as new () => FakeNetSuiteGateway)();
+    ns2.seedItem(connWithFallback.nsAccountId, 'SHIP-STANDARD', '12001');
+    (deps as { ns: FakeNetSuiteGateway }).ns = ns2;
+
+    const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome.kind).toBe('imported');
+
+    const records = ns2.getRecords(connWithFallback.nsAccountId, 'salesorder' as never);
+    expect(records.size).toBe(1);
+    const so = records.values().next().value as { payload: Record<string, unknown> };
+    const itemLines = (so.payload['item'] as { items: Array<Record<string, unknown>> }).items;
+    const widgetLine = itemLines.find((l) => {
+      const item = l['item'] as { id?: string } | undefined;
+      return item?.id === '6542';
+    });
+    expect(widgetLine).toBeDefined();
+  });
+
   it('parks an unclassified NS upsert failure (errorClass=unknown, stage=external_call)', async () => {
     // The brief's stance: "treat unknown like data so we never silently
     // retry-loop on a novel shape." M2-C wraps the post-claim pipeline in
