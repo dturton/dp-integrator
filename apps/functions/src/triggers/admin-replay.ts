@@ -28,11 +28,13 @@ import {
  *     "force": false                                    // override already_synced refusal
  *   }
  *
- * Auth: `function` level — caller must present `x-functions-key` matching the
- * function key. M2 acceptance ("REST + CLI replay (idempotent)") doesn't
- * require Entra; the function key gates ops access without the Easy-Auth +
- * app-registration setup. Upgrade path: layer Easy Auth via Bicep when more
- * than one operator needs the surface.
+ * Auth: anonymous at the function level. Sits behind the SWA's linked-
+ * backend, which forwards `/api/ops/*` from the SWA's hostname; the SWA
+ * itself enforces Entra-based access (once Easy Auth is configured).
+ * Calling the function-app URL directly is also possible — at the
+ * function-app boundary this is unauthenticated, but the function app
+ * is not publicly advertised, and Entra at the SWA layer is the real
+ * access control surface for ops.
  *
  * Behavior maps 1:1 to `requestReplay` outcomes; status codes:
  *   replayed                   → 202 Accepted (work is enqueued; pipeline runs async)
@@ -149,7 +151,7 @@ export function normalizeOrderGid(input: unknown): string | undefined {
 export function registerAdminReplay(getDeps: () => ReplayDeps): void {
   app.http('adminReplay', {
     methods: ['POST'],
-    authLevel: 'function',
+    authLevel: 'anonymous',
     route: 'ops/replay',
     handler: async (
       request: HttpRequest,

@@ -500,7 +500,7 @@ function clampInt(raw: string | null, fallback: number, lo: number, hi: number):
 export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void {
   app.http('adminStatus', {
     methods: ['GET'],
-    authLevel: 'function',
+    authLevel: 'anonymous',
     route: 'ops/status',
     handler: async (
       _request: HttpRequest,
@@ -517,7 +517,7 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
 
   app.http('adminOrders', {
     methods: ['GET'],
-    authLevel: 'function',
+    authLevel: 'anonymous',
     route: 'ops/orders',
     handler: async (
       request: HttpRequest,
@@ -535,7 +535,7 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
 
   app.http('adminOrderDetail', {
     methods: ['GET'],
-    authLevel: 'function',
+    authLevel: 'anonymous',
     route: 'ops/orders/detail',
     handler: async (
       request: HttpRequest,
@@ -553,7 +553,7 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
 
   app.http('adminReconciliation', {
     methods: ['GET'],
-    authLevel: 'function',
+    authLevel: 'anonymous',
     route: 'ops/reconciliation',
     handler: async (
       request: HttpRequest,
@@ -571,7 +571,7 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
 
   app.http('adminConnections', {
     methods: ['GET'],
-    authLevel: 'function',
+    authLevel: 'anonymous',
     route: 'ops/connections',
     handler: async (
       _request: HttpRequest,
@@ -588,7 +588,7 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
 
   app.http('adminReconcileRun', {
     methods: ['POST'],
-    authLevel: 'function',
+    authLevel: 'anonymous',
     route: 'ops/reconcile/run',
     handler: async (
       request: HttpRequest,
