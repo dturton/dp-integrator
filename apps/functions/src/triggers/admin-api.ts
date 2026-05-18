@@ -708,14 +708,16 @@ export async function handleAdminPayload(
     }
   }
 
-  // DB cross-check — the URI must appear in order_attempt as one of the three
-  // known artifact columns. This is the strongest guarantee that we only
-  // serve blobs we ourselves wrote during the order pipeline.
+  // DB cross-check — the URI must appear in order_attempt as one of the four
+  // known artifact columns (inbound webhook envelope, Shopify order body,
+  // outbound NS request, NS response). This is the strongest guarantee that
+  // we only serve blobs we ourselves wrote during the order pipeline.
   const ref = await deps.pgPool.query<{ exists: boolean }>(
     `SELECT EXISTS (
         SELECT 1 FROM order_attempt
          WHERE environment = $1
            AND (inbound_envelope_uri = $2
+                OR shopify_payload_uri = $2
                 OR outbound_payload_uri = $2
                 OR ns_response_uri = $2)
         LIMIT 1
