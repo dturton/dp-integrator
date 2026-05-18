@@ -43,6 +43,16 @@ export interface OrderAttempt {
   readonly detail?: string;
   readonly inboundEnvelopeUri?: string;
   readonly outboundPayloadUri?: string;
+  /**
+   * Blob URI of the raw NetSuite response body for this attempt. Populated
+   * only when NS was actually called (`imported`, `parked` at the
+   * `external_call` stage, and the `*_throw` outcomes when NS replied with a
+   * body). NULL when the pipeline parked before reaching NS or on network
+   * errors with no body.
+   */
+  readonly nsResponseUri?: string;
+  /** HTTP status code NS returned (e.g. 204, 400, 422). Mirrors nsResponseUri. */
+  readonly nsResponseStatus?: number;
   readonly payloadDigest?: Record<string, unknown>;
   readonly startedAt: Date;
   readonly finishedAt: Date;
@@ -63,6 +73,8 @@ export interface OrderAttemptInput {
   readonly detail?: string;
   readonly inboundEnvelopeUri?: string;
   readonly outboundPayloadUri?: string;
+  readonly nsResponseUri?: string;
+  readonly nsResponseStatus?: number;
   readonly payloadDigest?: Record<string, unknown>;
   readonly startedAt: Date;
   readonly finishedAt: Date;
@@ -105,6 +117,8 @@ export class InMemoryOrderAttemptStore implements OrderAttemptStore {
       ...(input.detail !== undefined ? { detail: input.detail } : {}),
       ...(input.inboundEnvelopeUri !== undefined ? { inboundEnvelopeUri: input.inboundEnvelopeUri } : {}),
       ...(input.outboundPayloadUri !== undefined ? { outboundPayloadUri: input.outboundPayloadUri } : {}),
+      ...(input.nsResponseUri !== undefined ? { nsResponseUri: input.nsResponseUri } : {}),
+      ...(input.nsResponseStatus !== undefined ? { nsResponseStatus: input.nsResponseStatus } : {}),
       ...(input.payloadDigest !== undefined ? { payloadDigest: input.payloadDigest } : {}),
       startedAt: input.startedAt,
       finishedAt: input.finishedAt,

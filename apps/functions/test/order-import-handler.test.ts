@@ -450,7 +450,13 @@ describe('handleOrderMessage — Slice M2-D retry visibility + payload archive',
       lineCount: 1,
       subsidiaryId: '1',
     });
-    expect(outboundPayloadStore.putCount()).toBe(1);
+    // NS-response capture (the payload-viewer slice): blob put fires twice
+    // per import — once for the outbound NS request, once for the NS
+    // response. ns_response_status surfaces NS's HTTP code so the UI can
+    // color the Response button without fetching the blob.
+    expect(rows[0]?.nsResponseUri).toMatch(/-response\.json$/);
+    expect(rows[0]?.nsResponseStatus).toBe(204);
+    expect(outboundPayloadStore.putCount()).toBe(2);
 
     // order_sync_log denormalization
     const log = await orderSyncLog.findByOrderGid({
@@ -553,8 +559,9 @@ describe('handleOrderMessage — Slice M2-D retry visibility + payload archive',
     expect(rows[0]?.outboundPayloadUri).toBeUndefined();
     expect(rows[0]?.payloadDigest).toBeUndefined();
     expect(rows[1]).toMatchObject({ deliveryCount: 1, outcome: 'imported' });
-    // Blob put fired exactly once — for the imported attempt, not the short-circuit.
-    expect(outboundPayloadStore.putCount()).toBe(1);
+    // Blob puts: 2 for the imported attempt (outbound NS request + NS
+    // response), 0 for the short-circuit. The redelivery never reaches NS.
+    expect(outboundPayloadStore.putCount()).toBe(2);
   });
 
   it('transient throw still records an attempt row (outcome=transient_throw) before re-throwing', async () => {

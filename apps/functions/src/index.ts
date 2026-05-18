@@ -78,6 +78,8 @@ registerAdminApi(() => {
     environment: ctx.environment,
     pgPool: ctx.pgPool,
     connections: ctx.connections,
+    ...(ctx.blobReader ? { blobReader: ctx.blobReader } : {}),
+    ...(ctx.blobAccountUrl ? { blobAccountUrl: ctx.blobAccountUrl } : {}),
     ...(ctx.orderSyncLog && ctx.reconciliationStore
       ? {
           reconciliation: {

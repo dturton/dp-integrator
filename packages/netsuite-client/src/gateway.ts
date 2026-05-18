@@ -4,12 +4,23 @@ import type { RecordType } from 'netsuite-sdk';
  * Result of an externalId-based upsert. NetSuite returns the (created or
  * updated) internal id; we surface it plus the externalId we wrote with so
  * callers can populate `entity_xref.target_id`.
+ *
+ * `rawResponse` is the raw transport response — status code, headers, and
+ * body (may be undefined for 204 No Content, which is the typical success
+ * shape). The handler archives this to blob storage so operators viewing
+ * the admin UI can inspect what NS actually returned. Opt-in: implementations
+ * MAY omit it (e.g. fakes that don't simulate transport).
  */
 export interface UpsertResult {
   readonly internalId: string;
   readonly externalId: string;
   /** Whether this was an insert vs update. NS reports it implicitly via 201/200; surface so xref bookkeeping can branch. */
   readonly created: boolean;
+  readonly rawResponse?: {
+    readonly status: number;
+    readonly headers?: Record<string, unknown>;
+    readonly body?: unknown;
+  };
 }
 
 /**

@@ -64,6 +64,20 @@ resource appPackageContainer 'Microsoft.Storage/storageAccounts/blobServices/con
   }
 }
 
+// Outbound NS payload + response archive. M2-D writes one blob per attempt
+// (the JSON shipped to NS) and the payload-viewer slice adds a parallel
+// `-response.json` blob (what NS returned). Different lifecycle from the
+// inbound webhook container — these are debug-grade derived artifacts, not
+// HMAC evidence, so retention is shorter. Same MI role assignment covers
+// both containers.
+resource outboundContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'outbound-netsuite'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 // Flex Consumption plan — supports always-ready instances so the webhook
 // receiver doesn't lose Shopify deliveries to cold starts.
 resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {

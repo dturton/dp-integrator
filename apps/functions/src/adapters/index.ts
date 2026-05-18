@@ -12,7 +12,7 @@ export { PostgresErrorStore } from './postgres-error-store.js';
 export { PostgresOrderSyncLogStore } from './postgres-order-sync-log-store.js';
 export { PostgresReconciliationStore } from './postgres-reconciliation-store.js';
 export { PostgresOrderAttemptStore } from './postgres-order-attempt-store.js';
-export { BlobPayloadStore } from './blob-payload-store.js';
+export { BlobPayloadStore, BlobReader, BlobTooLargeError } from './blob-payload-store.js';
 export { PostgresSyncWatermarkStore } from './postgres-sync-watermark-store.js';
 export {
   PostgresLookupResolver,

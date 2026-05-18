@@ -110,6 +110,8 @@ export interface OrderAttempt {
   readonly detail: string | null;
   readonly inboundEnvelopeUri: string | null;
   readonly outboundPayloadUri: string | null;
+  readonly nsResponseUri: string | null;
+  readonly nsResponseStatus: number | null;
   readonly payloadDigest: Record<string, unknown> | null;
   readonly startedAt: string;
   readonly finishedAt: string;
@@ -230,4 +232,44 @@ export const api = {
   connections: (): Promise<ConnectionsResponse> => get('/api/ops/connections'),
   reconcileRun: (daysBack = 1): Promise<ReconcileRunResult> =>
     postJson<ReconcileRunResult>('/api/ops/reconcile/run', { daysBack }),
+  /**
+   * Fetch the raw bytes of an archived payload (inbound envelope, outbound NS
+   * request, or NS response). Returns the body as a string — the proxy always
+   * serves application/json so callers can `JSON.parse(text)` for pretty
+   * rendering and fall back to raw text on parse error.
+   */
+  payload: async (uri: string): Promise<{ body: string; size: number; contentType: string }> => {
+    const params = new URLSearchParams({ uri });
+    const res = await fetch(`/api/ops/payload?${params.toString()}`, {
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new ApiError(res.status, text || `${res.status} ${res.statusText}`);
+    }
+    return {
+      body: await res.text(),
+      size: Number(res.headers.get('content-length') ?? 0),
+      contentType: res.headers.get('content-type') ?? 'application/json',
+    };
+  },
+  /**
+   * HEAD the proxy to learn a payload's size before downloading it. UI uses
+   * this to short-circuit rendering for large payloads (>256 KB).
+   */
+  payloadHead: async (uri: string): Promise<{ size: number; contentType: string }> => {
+    const params = new URLSearchParams({ uri });
+    const res = await fetch(`/api/ops/payload?${params.toString()}`, {
+      method: 'HEAD',
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      throw new ApiError(res.status, `${res.status} ${res.statusText}`);
+    }
+    return {
+      size: Number(res.headers.get('content-length') ?? 0),
+      contentType: res.headers.get('content-type') ?? 'application/json',
+    };
+  },
 };

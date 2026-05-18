@@ -10,6 +10,7 @@ import {
   runReconciliation,
   type ReconciliationDeps,
 } from './reconciliation-sweep.js';
+import { BlobTooLargeError, type BlobReader } from '../adapters/blob-payload-store.js';
 
 /**
  * Admin API surface backing the dpi admin UI (apps/admin-ui).
@@ -39,6 +40,18 @@ export interface AdminApiDeps {
    * Optional so a Slice-A-only env can boot without it.
    */
   readonly reconciliation?: ReconciliationDeps;
+  /**
+   * For /api/ops/payload — reads an archived blob via the function app's MI.
+   * Optional so unit tests can construct deps without the storage account
+   * available; bootstrap always provides it in prod.
+   */
+  readonly blobReader?: BlobReader;
+  /**
+   * Allowed blob origin for the payload proxy (e.g.
+   * `https://dpistdevxxx.blob.core.windows.net`). SSRF guard — any URI whose
+   * origin doesn't match this is rejected. Same value as BLOB_ACCOUNT_URL.
+   */
+  readonly blobAccountUrl?: string;
 }
 
 interface RecentOrderRow {
@@ -270,13 +283,17 @@ export async function handleAdminOrderDetail(
     detail: string | null;
     inbound_envelope_uri: string | null;
     outbound_payload_uri: string | null;
+    ns_response_uri: string | null;
+    ns_response_status: number | null;
     payload_digest: Record<string, unknown> | null;
     started_at: string;
     finished_at: string;
     duration_ms: number;
   }>(
     `SELECT delivery_count, outcome, stage, error_class, detail,
-            inbound_envelope_uri, outbound_payload_uri, payload_digest,
+            inbound_envelope_uri, outbound_payload_uri,
+            ns_response_uri, ns_response_status,
+            payload_digest,
             started_at::text AS started_at, finished_at::text AS finished_at, duration_ms
        FROM order_attempt
       WHERE environment=$1 AND connection_id=$2 AND shopify_order_gid=$3
@@ -322,6 +339,8 @@ export async function handleAdminOrderDetail(
         detail: a.detail,
         inboundEnvelopeUri: a.inbound_envelope_uri,
         outboundPayloadUri: a.outbound_payload_uri,
+        nsResponseUri: a.ns_response_uri,
+        nsResponseStatus: a.ns_response_status,
         payloadDigest: a.payload_digest,
         startedAt: a.started_at,
         finishedAt: a.finished_at,
@@ -604,4 +623,139 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
       return handleAdminReconcileRun(deps, body);
     },
   });
+
+  app.http('adminPayload', {
+    methods: ['GET', 'HEAD'],
+    authLevel: 'anonymous',
+    route: 'ops/payload',
+    handler: async (
+      request: HttpRequest,
+      context: InvocationContext,
+    ): Promise<HttpResponseInit> => {
+      const deps = getDeps();
+      if (!deps) {
+        context.log('adminPayload not_ready');
+        return { status: 503, jsonBody: { ok: false, reason: 'not_ready' } };
+      }
+      const url = new URL(request.url);
+      const uri = url.searchParams.get('uri') ?? '';
+      const headOnly = request.method === 'HEAD';
+      return handleAdminPayload(deps, uri, headOnly);
+    },
+  });
+}
+
+/**
+ * Proxy a single archived blob (inbound envelope, outbound NS payload, or NS
+ * response) through the function app's MI to the admin UI.
+ *
+ * SSRF defense in depth:
+ *   1. URI must parse as a URL.
+ *   2. Origin must equal `BLOB_ACCOUNT_URL` exactly — no wildcards, no
+ *      sibling subdomains.
+ *   3. Path segments must be non-empty and never decode to `..` or `.`.
+ *   4. The URI must appear in `order_attempt` (inbound/outbound/ns_response).
+ *      An attacker who can both upload a blob AND insert a row to bypass
+ *      this has already compromised more than the proxy can defend.
+ *   5. Body size is capped at 5 MB by the BlobReader.
+ *
+ * Response:
+ *   200 with `application/json` body. Always JSON (all three artifact kinds
+ *   are JSON), so we don't need to negotiate content type.
+ *   400 / 404 with `{ ok: false, reason }` JSON on validation failures.
+ *
+ * HEAD requests return just `Content-Length` + status, with no body. UI uses
+ * this to short-circuit rendering for large payloads.
+ */
+export async function handleAdminPayload(
+  deps: AdminApiDeps,
+  uri: string,
+  headOnly: boolean,
+): Promise<HttpResponseInit> {
+  if (!deps.blobReader || !deps.blobAccountUrl) {
+    return { status: 503, jsonBody: { ok: false, reason: 'not_ready', detail: 'blob reader not wired' } };
+  }
+  if (!uri) {
+    return { status: 400, jsonBody: { ok: false, reason: 'bad_request', detail: 'uri required' } };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    return { status: 400, jsonBody: { ok: false, reason: 'bad_request', detail: 'uri not a valid URL' } };
+  }
+  const expectedOrigin = new URL(deps.blobAccountUrl).origin;
+  if (parsed.origin !== expectedOrigin) {
+    return { status: 400, jsonBody: { ok: false, reason: 'bad_origin', detail: `origin must be ${expectedOrigin}` } };
+  }
+  // Per-segment decode + traversal guard.
+  const segments = parsed.pathname.split('/').filter((s) => s.length > 0);
+  if (segments.length < 2) {
+    return { status: 400, jsonBody: { ok: false, reason: 'bad_request', detail: 'uri missing container/blob path' } };
+  }
+  for (const raw of segments) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      return { status: 400, jsonBody: { ok: false, reason: 'bad_request', detail: 'invalid url encoding' } };
+    }
+    if (decoded === '..' || decoded === '.' || decoded.length === 0) {
+      return { status: 400, jsonBody: { ok: false, reason: 'bad_request', detail: 'rejected path segment' } };
+    }
+  }
+
+  // DB cross-check — the URI must appear in order_attempt as one of the three
+  // known artifact columns. This is the strongest guarantee that we only
+  // serve blobs we ourselves wrote during the order pipeline.
+  const ref = await deps.pgPool.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+        SELECT 1 FROM order_attempt
+         WHERE environment = $1
+           AND (inbound_envelope_uri = $2
+                OR outbound_payload_uri = $2
+                OR ns_response_uri = $2)
+        LIMIT 1
+      ) AS exists`,
+    [deps.environment, uri],
+  );
+  if (!ref.rows[0]?.exists) {
+    return { status: 404, jsonBody: { ok: false, reason: 'not_found' } };
+  }
+
+  if (headOnly) {
+    try {
+      const meta = await deps.blobReader.head(uri);
+      return {
+        status: 200,
+        headers: {
+          'Content-Length': String(meta.size),
+          'Content-Type': meta.contentType,
+          'Cache-Control': 'private, max-age=3600, immutable',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      };
+    } catch {
+      return { status: 404, jsonBody: { ok: false, reason: 'not_found' } };
+    }
+  }
+
+  try {
+    const blob = await deps.blobReader.getJson(uri);
+    return {
+      status: 200,
+      body: blob.body,
+      headers: {
+        'Content-Type': blob.contentType,
+        'Content-Length': String(blob.size),
+        'Cache-Control': 'private, max-age=3600, immutable',
+        'X-Content-Type-Options': 'nosniff',
+      },
+    };
+  } catch (err) {
+    if (err instanceof BlobTooLargeError) {
+      return { status: 413, jsonBody: { ok: false, reason: 'too_large', detail: err.message } };
+    }
+    return { status: 404, jsonBody: { ok: false, reason: 'not_found' } };
+  }
 }

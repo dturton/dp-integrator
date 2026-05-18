@@ -87,6 +87,11 @@ export class SdkNetSuiteGateway implements NetSuiteGateway {
       // stays unchanged (recordSuccess wires xref.target_external to this).
       externalId: args.externalId,
       created: response.status === 201,
+      rawResponse: {
+        status: response.status,
+        ...(response.headers !== undefined ? { headers: response.headers as Record<string, unknown> } : {}),
+        ...(response.body !== undefined ? { body: response.body } : {}),
+      },
     };
   }
 
@@ -193,9 +198,20 @@ function transportOf(client: unknown): SdkTransport {
  * error `details` (which the Azure Functions host serializer drops). Keeps
  * the original error attached via `cause` so downstream callers can still
  * introspect it.
+ *
+ * Also attaches `rawNsResponse = { status, body }` on the wrapped error so
+ * the handler's catch can blob-archive the raw NS error payload for the
+ * admin UI's response-viewer (untruncated, structured form). Falls back to
+ * `details` when the SDK didn't surface a body field.
  */
 function decorateNsError(err: unknown, context: string, requestBody?: unknown): Error {
-  const e = err as { name?: string; status?: number; message?: string; details?: unknown };
+  const e = err as {
+    name?: string;
+    status?: number;
+    message?: string;
+    details?: unknown;
+    body?: unknown;
+  };
   if (e?.name !== 'NetSuiteError') return err as Error;
   const detailsStr =
     e.details !== undefined ? ` details=${JSON.stringify(e.details).slice(0, 1500)}` : '';
@@ -205,6 +221,15 @@ function decorateNsError(err: unknown, context: string, requestBody?: unknown): 
     `NS ${context} status=${e.status} ${e.message ?? ''}${detailsStr}${bodyStr}`,
   );
   (wrapped as { cause?: unknown }).cause = err;
+  // Raw NS response for blob archiving — handler reads `rawNsResponse` off the
+  // thrown error and persists it before rethrow/park. body || details so we
+  // capture the structured payload regardless of which field the SDK
+  // populated.
+  const responseBody = e.body !== undefined ? e.body : e.details;
+  (wrapped as { rawNsResponse?: { status?: number; body?: unknown } }).rawNsResponse = {
+    ...(e.status !== undefined ? { status: e.status } : {}),
+    ...(responseBody !== undefined ? { body: responseBody } : {}),
+  };
   return wrapped;
 }
 

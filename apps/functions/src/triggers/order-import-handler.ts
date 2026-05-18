@@ -180,17 +180,17 @@ export async function handleOrderMessage(
   // retries.
   if (claim.outcome === 'already_synced') {
     const o: OrderHandlerOutcome = { kind: 'already_synced', connectionId: connection.connectionId, orderGid: msg.orderGid };
-    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined);
+    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined, undefined, undefined);
     return o;
   }
   if (claim.outcome === 'already_claimed') {
     const o: OrderHandlerOutcome = { kind: 'already_claimed', connectionId: connection.connectionId, orderGid: msg.orderGid };
-    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined);
+    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined, undefined, undefined);
     return o;
   }
   if (claim.outcome === 'ignored') {
     const o: OrderHandlerOutcome = { kind: 'ignored', connectionId: connection.connectionId, orderGid: msg.orderGid };
-    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined);
+    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined, undefined, undefined);
     return o;
   }
   // claim.outcome === 'claimed' — proceed. Everything from here on is wrapped
@@ -209,6 +209,8 @@ export async function handleOrderMessage(
   let outcome: OrderHandlerOutcome | undefined;
   let throwErr: unknown;
   let outboundPayloadUri: string | undefined;
+  let nsResponseUri: string | undefined;
+  let nsResponseStatus: number | undefined;
   let payloadDigest: Record<string, unknown> | undefined;
   const finish = (o: OrderHandlerOutcome): OrderHandlerOutcome => (outcome = o);
   try {
@@ -342,6 +344,28 @@ export async function handleOrderMessage(
       payload: finalPayload as Record<string, unknown>,
     });
 
+    // 10b. Archive the raw NS response so the admin UI can show it (body is
+    // typically empty for 204 No Content; metadata + Location header are
+    // still useful evidence of what NS returned). Same best-effort pattern
+    // as the outbound archive — never block the SB ack on debug fuel.
+    if (upserted.rawResponse !== undefined) {
+      nsResponseStatus = upserted.rawResponse.status;
+      if (deps.outboundPayloadStore && attemptCtx) {
+        nsResponseUri = await deps.outboundPayloadStore
+          .put(upserted.rawResponse as unknown as Record<string, unknown>, {
+            environment: msg.environment,
+            connectionId: connection.connectionId,
+            shopifyOrderGid: msg.orderGid,
+            deliveryCount: attemptCtx.deliveryCount,
+            nsAccountId: connection.nsAccountId,
+            nsRecordType: recordType,
+            attemptStartedAt: attemptCtx.startedAt,
+            kind: 'ns_response',
+          })
+          .catch(() => undefined);
+      }
+    }
+
     // 11. recordSuccess → xref status = 'synced' with the NS internal id
     await deps.xrefStore.recordSuccess(dedupKey, upserted.internalId, msg.orderGid);
 
@@ -415,6 +439,28 @@ export async function handleOrderMessage(
       customer,
     });
   } catch (err) {
+    // If NS handed us a structured error body (decorateNsError attached it
+    // as `rawNsResponse`), archive it before the classifier decides what to
+    // do with the throw. NS error bodies are the most-debug-valuable artifact
+    // a parked order can carry — preserving them verbatim avoids the
+    // truncation that `park_detail` applies to fit the column width.
+    const rawNs = (err as { rawNsResponse?: { status?: number; body?: unknown } }).rawNsResponse;
+    if (rawNs) {
+      if (rawNs.status !== undefined) nsResponseStatus = rawNs.status;
+      if (deps.outboundPayloadStore && attemptCtx) {
+        nsResponseUri = await deps.outboundPayloadStore
+          .put(rawNs as unknown as Record<string, unknown>, {
+            environment: msg.environment,
+            connectionId: connection.connectionId,
+            shopifyOrderGid: msg.orderGid,
+            deliveryCount: attemptCtx.deliveryCount,
+            nsAccountId: connection.nsAccountId,
+            attemptStartedAt: attemptCtx.startedAt,
+            kind: 'ns_response',
+          })
+          .catch(() => undefined);
+      }
+    }
     try {
       return finish(await classifyAndRoute(deps, dedupKey, connection, msg, err, order, attemptCtx));
     } catch (rethrown) {
@@ -422,7 +468,18 @@ export async function handleOrderMessage(
       throw rethrown;
     }
   } finally {
-    await recordAttempt(deps, attemptCtx, msg, connection, outcome, throwErr, outboundPayloadUri, payloadDigest);
+    await recordAttempt(
+      deps,
+      attemptCtx,
+      msg,
+      connection,
+      outcome,
+      throwErr,
+      outboundPayloadUri,
+      payloadDigest,
+      nsResponseUri,
+      nsResponseStatus,
+    );
   }
 }
 
@@ -660,6 +717,8 @@ async function recordAttempt(
   throwErr: unknown,
   outboundPayloadUri: string | undefined,
   payloadDigest: Record<string, unknown> | undefined,
+  nsResponseUri: string | undefined,
+  nsResponseStatus: number | undefined,
 ): Promise<void> {
   if (!deps.orderAttemptStore || !attemptCtx) return;
   const finishedAt = new Date();
@@ -680,6 +739,8 @@ async function recordAttempt(
       ? { inboundEnvelopeUri: msg.envelopeBlobUri }
       : {}),
     ...(outboundPayloadUri ? { outboundPayloadUri } : {}),
+    ...(nsResponseUri ? { nsResponseUri } : {}),
+    ...(nsResponseStatus !== undefined ? { nsResponseStatus } : {}),
     ...(payloadDigest ? { payloadDigest } : {}),
     startedAt: attemptCtx.startedAt,
     finishedAt,

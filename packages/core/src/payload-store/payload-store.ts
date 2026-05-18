@@ -12,6 +12,15 @@ import type { Environment } from '../env.js';
  * gracefully to "no archive for this attempt".
  */
 
+/**
+ * `outbound` — the JSON we shipped to NS. Default kind, preserves the
+ * existing per-attempt path shape so legacy reads keep working.
+ * `ns_response` — what NS returned (success or structured error). Same
+ * attempt, same path layout, with a `-response.json` suffix so both blobs
+ * sit next to each other in the date partition.
+ */
+export type PayloadKind = 'outbound' | 'ns_response';
+
 export interface PayloadStoreContext {
   readonly environment: Environment;
   readonly connectionId: string;
@@ -23,6 +32,8 @@ export interface PayloadStoreContext {
   readonly nsRecordType?: string;
   /** When the attempt started — drives the date partitioning in the blob path. */
   readonly attemptStartedAt: Date;
+  /** Defaults to 'outbound'. 'ns_response' suffixes the blob path with `-response.json`. */
+  readonly kind?: PayloadKind;
 }
 
 export interface PayloadStore {
@@ -74,5 +85,6 @@ function pathFor(ctx: PayloadStoreContext): string {
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
   const ts = d.toISOString().replace(/[:.]/g, '-');
-  return `mem://outbound/${ctx.environment}/${ctx.connectionId}/${yyyy}/${mm}/${dd}/${id}-attempt${ctx.deliveryCount}-${ts}.json`;
+  const suffix = ctx.kind === 'ns_response' ? '-response.json' : '.json';
+  return `mem://outbound/${ctx.environment}/${ctx.connectionId}/${yyyy}/${mm}/${dd}/${id}-attempt${ctx.deliveryCount}-${ts}${suffix}`;
 }

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, ExternalLink, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, RefreshCw, AlertTriangle, CheckCircle2, FileJson, Inbox, Send } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { PayloadDrawer } from '@/components/PayloadDrawer';
 import {
   api,
   ApiError,
@@ -13,6 +14,13 @@ import {
   type OrderDetailResponse,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+
+interface DrawerState {
+  open: boolean;
+  uri: string | null;
+  title: string;
+  subtitle?: string;
+}
 
 /**
  * Single-order drill-down. Layout: order header card (Shopify totals +
@@ -30,6 +38,14 @@ export function OrderDetail(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [replayBusy, setReplayBusy] = useState(false);
   const [replayMessage, setReplayMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [drawer, setDrawer] = useState<DrawerState>({ open: false, uri: null, title: '' });
+
+  const openPayload = useCallback((uri: string, title: string, subtitle?: string): void => {
+    setDrawer({ open: true, uri, title, ...(subtitle !== undefined ? { subtitle } : {}) });
+  }, []);
+  const closePayload = useCallback((): void => {
+    setDrawer((d) => ({ ...d, open: false }));
+  }, []);
 
   const load = useCallback(() => {
     if (!connectionId || !orderId) return;
@@ -176,7 +192,21 @@ export function OrderDetail(): React.ReactElement {
       {loading && !data && <p className="text-sm text-muted-foreground">Loading…</p>}
 
       {data && <OrderHeaderCard order={data.order} />}
-      {data && <AttemptsCard attempts={data.attempts} />}
+      {data && (
+        <AttemptsCard
+          attempts={data.attempts}
+          orderName={data.order.shopifyOrderName ?? `#${orderId}`}
+          onView={openPayload}
+        />
+      )}
+
+      <PayloadDrawer
+        open={drawer.open}
+        uri={drawer.uri}
+        title={drawer.title}
+        {...(drawer.subtitle !== undefined ? { subtitle: drawer.subtitle } : {})}
+        onClose={closePayload}
+      />
     </div>
   );
 }
@@ -225,13 +255,21 @@ function OrderHeaderCard({ order }: { order: OrderDetailT }): React.ReactElement
   );
 }
 
-function AttemptsCard({ attempts }: { attempts: ReadonlyArray<OrderAttempt> }): React.ReactElement {
+function AttemptsCard({
+  attempts,
+  orderName,
+  onView,
+}: {
+  attempts: ReadonlyArray<OrderAttempt>;
+  orderName: string;
+  onView: (uri: string, title: string, subtitle?: string) => void;
+}): React.ReactElement {
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Service Bus delivery timeline</CardTitle>
         <CardDescription>
-          Newest first. Outbound payload links open the archived NS-bound JSON for that attempt.
+          Newest first. Click an Inbound / Outbound / Response button to view that attempt's archived JSON.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -243,7 +281,7 @@ function AttemptsCard({ attempts }: { attempts: ReadonlyArray<OrderAttempt> }): 
               <TableHead className="hidden md:table-cell w-32">Stage</TableHead>
               <TableHead className="hidden sm:table-cell">Detail</TableHead>
               <TableHead className="hidden lg:table-cell w-24 text-right">Duration</TableHead>
-              <TableHead className="hidden md:table-cell w-32">Payload</TableHead>
+              <TableHead className="w-48 md:w-64">Payloads</TableHead>
               <TableHead className="hidden lg:table-cell w-44">Started</TableHead>
             </TableRow>
           </TableHeader>
@@ -266,19 +304,8 @@ function AttemptsCard({ attempts }: { attempts: ReadonlyArray<OrderAttempt> }): 
                   {a.detail ? <span className="line-clamp-2">{a.detail}</span> : '—'}
                 </TableCell>
                 <TableCell className="hidden lg:table-cell text-right font-mono text-xs">{a.durationMs}ms</TableCell>
-                <TableCell className="hidden md:table-cell">
-                  {a.outboundPayloadUri ? (
-                    <a
-                      href={a.outboundPayloadUri}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs underline-offset-2 hover:underline"
-                    >
-                      view <ExternalLink className="h-3 w-3" />
-                    </a>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">—</span>
-                  )}
+                <TableCell>
+                  <PayloadButtons attempt={a} orderName={orderName} onView={onView} />
                 </TableCell>
                 <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">{formatWhen(a.startedAt)}</TableCell>
               </TableRow>
@@ -287,6 +314,83 @@ function AttemptsCard({ attempts }: { attempts: ReadonlyArray<OrderAttempt> }): 
         </Table>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Three small inline buttons per attempt — Inbound (Shopify envelope),
+ * Outbound (NS request), Response (NS reply). Disabled with a tooltip when
+ * the corresponding URI isn't on this attempt (e.g., parked before NS, or
+ * NS network error with no response body). The NS status code (if known)
+ * decorates the Response label so operators can see 204 vs 422 at a glance.
+ */
+function PayloadButtons({
+  attempt,
+  orderName,
+  onView,
+}: {
+  attempt: OrderAttempt;
+  orderName: string;
+  onView: (uri: string, title: string, subtitle?: string) => void;
+}): React.ReactElement {
+  const baseSubtitle = `attempt ${attempt.deliveryCount}`;
+  const responseLabel =
+    attempt.nsResponseStatus !== null && attempt.nsResponseStatus !== undefined
+      ? `Response ${attempt.nsResponseStatus}`
+      : 'Response';
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <PayloadButton
+        icon={<Inbox className="h-3 w-3" />}
+        label="Inbound"
+        title={attempt.inboundEnvelopeUri ? undefined : 'No envelope archived (replay messages have no inbound)'}
+        uri={attempt.inboundEnvelopeUri}
+        onClick={() => onView(attempt.inboundEnvelopeUri!, `${orderName} — Inbound envelope`, baseSubtitle)}
+      />
+      <PayloadButton
+        icon={<Send className="h-3 w-3" />}
+        label="Outbound"
+        title={attempt.outboundPayloadUri ? undefined : 'Pipeline parked before reaching NS'}
+        uri={attempt.outboundPayloadUri}
+        onClick={() => onView(attempt.outboundPayloadUri!, `${orderName} — Outbound NS request`, baseSubtitle)}
+      />
+      <PayloadButton
+        icon={<FileJson className="h-3 w-3" />}
+        label={responseLabel}
+        title={attempt.nsResponseUri ? undefined : 'NS not called or response not captured'}
+        uri={attempt.nsResponseUri}
+        onClick={() => onView(attempt.nsResponseUri!, `${orderName} — NS response`, `${baseSubtitle} · status=${attempt.nsResponseStatus ?? '?'}`)}
+      />
+    </div>
+  );
+}
+
+function PayloadButton({
+  icon,
+  label,
+  title,
+  uri,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  title?: string | undefined;
+  uri: string | null;
+  onClick: () => void;
+}): React.ReactElement {
+  const enabled = uri !== null && uri.length > 0;
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={!enabled}
+      onClick={enabled ? onClick : undefined}
+      title={title}
+      className="h-6 gap-1 px-2 text-xs"
+    >
+      {icon}
+      <span>{label}</span>
+    </Button>
   );
 }
 

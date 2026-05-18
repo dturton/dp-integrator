@@ -82,11 +82,21 @@ export class FakeNetSuiteGateway implements NetSuiteGateway {
     if (existing) {
       // Update in place — same internalId, no new row.
       existing.payload = args.payload;
-      return { internalId: existing.internalId, externalId: args.externalId, created: false };
+      return {
+        internalId: existing.internalId,
+        externalId: args.externalId,
+        created: false,
+        rawResponse: { status: 204, headers: { location: `/services/rest/record/v1/${args.recordType}/${existing.internalId}` } },
+      };
     }
     const internalId = `ns_${args.nsAccountId}_${++this.internalIdSeq}`;
     bucket.set(args.externalId, { internalId, payload: args.payload });
-    return { internalId, externalId: args.externalId, created: true };
+    return {
+      internalId,
+      externalId: args.externalId,
+      created: true,
+      rawResponse: { status: 204, headers: { location: `/services/rest/record/v1/${args.recordType}/${internalId}` } },
+    };
   }
 
   async findByExternalId(args: {

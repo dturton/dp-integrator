@@ -26,15 +26,19 @@ export class PostgresOrderAttemptStore implements OrderAttemptStore {
         environment, connection_id, shopify_order_gid,
         delivery_count, sb_message_id, sb_session_id,
         outcome, stage, error_class, detail,
-        inbound_envelope_uri, outbound_payload_uri, payload_digest,
+        inbound_envelope_uri, outbound_payload_uri,
+        ns_response_uri, ns_response_status,
+        payload_digest,
         started_at, finished_at, duration_ms
       )
       VALUES (
         $1, $2, $3,
         $4, $5, $6,
         $7, $8, $9, $10,
-        $11, $12, $13::jsonb,
-        $14, $15, $16
+        $11, $12,
+        $13, $14,
+        $15::jsonb,
+        $16, $17, $18
       )
       RETURNING *
       `,
@@ -51,6 +55,8 @@ export class PostgresOrderAttemptStore implements OrderAttemptStore {
         input.detail ?? null,
         input.inboundEnvelopeUri ?? null,
         input.outboundPayloadUri ?? null,
+        input.nsResponseUri ?? null,
+        input.nsResponseStatus ?? null,
         input.payloadDigest !== undefined ? JSON.stringify(input.payloadDigest) : null,
         input.startedAt,
         input.finishedAt,
@@ -92,6 +98,8 @@ interface OrderAttemptDb {
   detail: string | null;
   inbound_envelope_uri: string | null;
   outbound_payload_uri: string | null;
+  ns_response_uri: string | null;
+  ns_response_status: number | null;
   payload_digest: Record<string, unknown> | null;
   started_at: Date;
   finished_at: Date;
@@ -114,6 +122,8 @@ function toRow(row: OrderAttemptDb): OrderAttempt {
     ...(row.detail !== null ? { detail: row.detail } : {}),
     ...(row.inbound_envelope_uri !== null ? { inboundEnvelopeUri: row.inbound_envelope_uri } : {}),
     ...(row.outbound_payload_uri !== null ? { outboundPayloadUri: row.outbound_payload_uri } : {}),
+    ...(row.ns_response_uri !== null ? { nsResponseUri: row.ns_response_uri } : {}),
+    ...(row.ns_response_status !== null ? { nsResponseStatus: row.ns_response_status } : {}),
     ...(row.payload_digest !== null ? { payloadDigest: row.payload_digest } : {}),
     startedAt: row.started_at,
     finishedAt: row.finished_at,

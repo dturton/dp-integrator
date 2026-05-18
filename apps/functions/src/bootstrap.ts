@@ -29,6 +29,7 @@ import { ShopifyHttpGateway, type ShopifyGateway } from '@dpi/shopify-client';
 import {
   BlobEnvelopeStore,
   BlobPayloadStore,
+  BlobReader,
   KeyVaultSecretProvider,
   PostgresErrorStore,
   PostgresOrderAttemptStore,
@@ -77,6 +78,13 @@ export interface AppContext {
   readonly outboundPayloadStore?: PayloadStore;
   /** Slice M3-B — daily reconciliation snapshots. */
   readonly reconciliationStore?: ReconciliationStore;
+  /**
+   * Read-side companion to outboundPayloadStore — backs the /api/ops/payload
+   * proxy that streams archived blobs to the admin UI.
+   */
+  readonly blobReader?: BlobReader;
+  /** Allowed blob-account origin for the payload proxy (SSRF guard). */
+  readonly blobAccountUrl?: string;
 }
 
 let cached: AppContext | undefined;
@@ -148,6 +156,9 @@ function buildAppContext(): AppContext {
     accountUrl: blobAccountUrl,
     container: outboundContainer,
   });
+  // Same MI auth, no per-container scoping — the proxy validates URIs
+  // against an allowlist + DB cross-check before each read.
+  const blobReader = new BlobReader({ accountUrl: blobAccountUrl });
 
   return {
     environment,
@@ -172,6 +183,8 @@ function buildAppContext(): AppContext {
     ...(orderAttemptStore ? { orderAttemptStore } : {}),
     ...(reconciliationStore ? { reconciliationStore } : {}),
     outboundPayloadStore,
+    blobReader,
+    blobAccountUrl,
   };
 }
 

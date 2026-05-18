@@ -96,6 +96,7 @@ export {
   InMemoryPayloadStore,
   type PayloadStore,
   type PayloadStoreContext,
+  type PayloadKind,
 } from './payload-store/index.js';
 
 // Replay (M2)
