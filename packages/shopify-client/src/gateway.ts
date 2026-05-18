@@ -70,12 +70,39 @@ export interface ShopifyGateway {
     connection: Connection,
     args: { since: string; limit?: number },
   ): Promise<ReadonlyArray<OrderSummary>>;
+
+  /**
+   * Aggregate count + total-price of orders with `processed_at` inside
+   * `[fromInclusive, toExclusive)`, for the daily reconciliation sweep
+   * (slice M3-B). Filters to non-test orders. Pages through Shopify
+   * internally until exhausted — caller treats this as one logical
+   * operation per (connection, day).
+   *
+   * Returns the totals in the order's presentment currency. Mixed-currency
+   * stores get the totals broken out per currency code via the
+   * `byCurrency` map; the top-level `total` field uses the connection's
+   * `baseCurrency` if all orders are in it, otherwise the largest bucket.
+   */
+  getDailyOrderAggregate(
+    connection: Connection,
+    args: { fromInclusive: string; toExclusive: string },
+  ): Promise<OrderDailyAggregate>;
 }
 
 /** Minimum order shape the catch-up poller needs. */
 export interface OrderSummary {
   readonly id: string;
   readonly updatedAt: string;
+}
+
+/**
+ * Result of `getDailyOrderAggregate`. Counts non-test orders that completed
+ * in the window, with totals in each currency observed.
+ */
+export interface OrderDailyAggregate {
+  readonly count: number;
+  /** Totals per ISO 4217 code, e.g. `{ USD: '12345.67' }`. Strings to preserve precision. */
+  readonly totalsByCurrency: Readonly<Record<string, string>>;
 }
 
 /**

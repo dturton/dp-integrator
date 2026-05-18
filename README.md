@@ -222,6 +222,45 @@ Inspect state from the dpi CLI's PG env:
 SELECT * FROM sync_watermarks WHERE environment = 'dev';
 ```
 
+### Daily reconciliation sweep (M3-B)
+
+A timer-triggered function (`dailyReconciliationSweep`, default cron
+`0 0 6 * * *` — 06:00 UTC daily) compares Shopify's aggregate against the
+local order ledger for the prior business day per connection.
+
+For each enabled connection × day in the lookback window:
+
+1. **Shopify side** — `orders` GraphQL query filtered to
+   `processed_at:>=<from> processed_at:<<to> test:false`, summed across all
+   pages (up to 40 × 250 = 10 000 orders/day).
+2. **Ledger side** — `order_sync_log` rows with `status='imported'` whose
+   `synced_at` falls in the same UTC window, summed.
+3. **Compare** — if counts differ OR totals differ beyond ±$0.05 (default
+   tolerance), the snapshot's `discrepancy` JSON describes the drift and
+   `dpi.reconciliation.drift` fires as both a `customMetric` and a
+   `customEvent` for alerting.
+4. **Persist** — one row per `(env, connection, business_date)` upserted
+   into `reconciliation_snapshots`. Drift or not, every day gets a row so
+   "the sweep didn't run" is itself observable.
+
+Inspect from the CLI:
+
+```bash
+node apps/admin/dist/cli.js reconcile --limit 14
+node apps/admin/dist/cli.js reconcile --connection dev-store-1 --from 2026-05-01
+```
+
+Drift rows are highlighted; the `discrepancy` cell shows the
+`reason / countDiff / totalDiff` triplet that an operator can act on.
+
+To page on drift, the same Azure Monitor alert recipe used for
+`dpi.auth_error` (see below) works — just change the query name:
+
+```kusto
+customEvents
+| where name == "dpi.reconciliation.drift"
+```
+
 ### Sync-health metrics + auth alert
 
 The handler and the catch-up poller emit App Insights `customMetrics` and

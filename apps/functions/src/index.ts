@@ -17,6 +17,7 @@ import { registerNsDiagnostic } from './triggers/ns-diagnostic.js';
 import { registerOrderCatchupPoller } from './triggers/order-catchup-poller.js';
 import { registerOrderDlqHandler } from './triggers/order-dlq-handler.js';
 import { registerOrderImportHandler } from './triggers/order-import-handler.js';
+import { registerReconciliationSweep } from './triggers/reconciliation-sweep.js';
 import { registerShopifyWebhook } from './triggers/shopify-webhook.js';
 
 registerShopifyWebhook(() => getAppContext());
@@ -107,6 +108,23 @@ registerOrderCatchupPoller(() => {
     watermarkStore: ctx.watermarkStore,
     shopify: ctx.shopify,
     queue: ctx.orderQueue,
+    telemetry: getTelemetry(),
+  };
+});
+
+// M3-B: daily reconciliation sweep. Runs once a day; compares yesterday's
+// Shopify-side count + total (`processed_at` window, non-test orders) to
+// the dpi order_sync_log aggregate (status='imported') for the same window.
+// Drift surfaces as a `dpi.reconciliation.drift` customEvent + a row in
+// `reconciliation_snapshots`.
+registerReconciliationSweep(() => {
+  const ctx = getAppContext();
+  return {
+    environment: ctx.environment,
+    connections: ctx.connections,
+    shopify: ctx.shopify,
+    orderSyncLog: ctx.orderSyncLog,
+    reconciliationStore: ctx.reconciliationStore,
     telemetry: getTelemetry(),
   };
 });

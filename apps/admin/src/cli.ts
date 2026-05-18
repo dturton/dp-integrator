@@ -32,6 +32,7 @@
 import { attemptsCommand } from './commands/attempts.js';
 import { parkedCommand } from './commands/parked.js';
 import { recentCommand } from './commands/recent.js';
+import { reconcileCommand } from './commands/reconcile.js';
 import { replayCommand } from './commands/replay.js';
 import { statusCommand } from './commands/status.js';
 
@@ -48,6 +49,11 @@ Commands:
       --status <s>          filter to imported | parked | ignored
   attempts <gid|id>       Full Service Bus delivery timeline for one order (M2-D)
       --connection <id>     required — connection id (e.g. acme-us)
+  reconcile [opts]        Daily Shopify-vs-dpi snapshot table (M3-B); drift in red
+      --limit N             default 14
+      --connection <id>     filter to one connection
+      --from YYYY-MM-DD     business_date lower bound (inclusive)
+      --to YYYY-MM-DD       business_date upper bound (inclusive)
   replay <gid|id>         Re-publish an order through the import pipeline
       --connection <id>     required — connection id from \`dpi parked\` output
       --force               override the refusal when xref status='synced'
@@ -81,6 +87,9 @@ async function main(): Promise<void> {
       return;
     case 'attempts':
       await attemptsCommand(rest);
+      return;
+    case 'reconcile':
+      await reconcileCommand(rest);
       return;
     case 'replay':
       await replayCommand(rest);

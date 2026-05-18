@@ -73,6 +73,15 @@ export {
   type OrderSyncLogStore,
 } from './order-sync-log/order-sync-log-store.js';
 
+// Reconciliation (M3-B — daily Shopify vs dpi-ledger drift check)
+export {
+  InMemoryReconciliationStore,
+  type ReconciliationListFilter,
+  type ReconciliationSnapshot,
+  type ReconciliationSnapshotInput,
+  type ReconciliationStore,
+} from './reconciliation/reconciliation-store.js';
+
 // Order attempts (per-Service-Bus-delivery audit trail — retry visibility + payload links)
 export {
   InMemoryOrderAttemptStore,

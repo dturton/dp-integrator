@@ -13,6 +13,7 @@ import {
   type OrderSyncLogStore,
   type PayloadStore,
   type QueueProducer,
+  type ReconciliationStore,
   type SecretProvider,
   type SyncWatermarkStore,
   type XrefStore,
@@ -32,6 +33,7 @@ import {
   PostgresErrorStore,
   PostgresOrderAttemptStore,
   PostgresOrderSyncLogStore,
+  PostgresReconciliationStore,
   PostgresSyncWatermarkStore,
   PostgresXrefStore,
   ServiceBusQueueProducer,
@@ -73,6 +75,8 @@ export interface AppContext {
   readonly orderAttemptStore?: OrderAttemptStore;
   /** Slice M2-D — outbound NS payload archive. Independent of pgPool. */
   readonly outboundPayloadStore?: PayloadStore;
+  /** Slice M3-B — daily reconciliation snapshots. */
+  readonly reconciliationStore?: ReconciliationStore;
 }
 
 let cached: AppContext | undefined;
@@ -127,6 +131,7 @@ function buildAppContext(): AppContext {
   let watermarkStore: SyncWatermarkStore | undefined;
   let orderSyncLog: OrderSyncLogStore | undefined;
   let orderAttemptStore: OrderAttemptStore | undefined;
+  let reconciliationStore: ReconciliationStore | undefined;
   if (pgHost && pgDatabase && pgUser) {
     pgPool = buildPgPool({ host: pgHost, database: pgDatabase, user: pgUser });
     xrefStore = new PostgresXrefStore(pgPool);
@@ -134,6 +139,7 @@ function buildAppContext(): AppContext {
     watermarkStore = new PostgresSyncWatermarkStore(pgPool);
     orderSyncLog = new PostgresOrderSyncLogStore(pgPool);
     orderAttemptStore = new PostgresOrderAttemptStore(pgPool);
+    reconciliationStore = new PostgresReconciliationStore(pgPool);
   }
   // M2-D outbound-payload archive — same storage account as the inbound
   // envelopes, distinct container. Independent of pgPool: even a no-DB
@@ -164,6 +170,7 @@ function buildAppContext(): AppContext {
     ...(watermarkStore ? { watermarkStore } : {}),
     ...(orderSyncLog ? { orderSyncLog } : {}),
     ...(orderAttemptStore ? { orderAttemptStore } : {}),
+    ...(reconciliationStore ? { reconciliationStore } : {}),
     outboundPayloadStore,
   };
 }

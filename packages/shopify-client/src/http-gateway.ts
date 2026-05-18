@@ -1,5 +1,10 @@
 import type { Connection, SecretProvider } from '@dpi/core';
-import { OrderNotFoundError, type OrderSummary, type ShopifyGateway } from './gateway.js';
+import {
+  OrderNotFoundError,
+  type OrderDailyAggregate,
+  type OrderSummary,
+  type ShopifyGateway,
+} from './gateway.js';
 import { verifyShopifyHmac } from './hmac.js';
 import type {
   MoneyV2,
@@ -140,6 +145,78 @@ export class ShopifyHttpGateway implements ShopifyGateway {
     return edges.map((e) => ({ id: e.node.id, updatedAt: e.node.updatedAt }));
   }
 
+  async getDailyOrderAggregate(
+    connection: Connection,
+    args: { fromInclusive: string; toExclusive: string },
+  ): Promise<OrderDailyAggregate> {
+    const accessToken = await this.resolveAccessToken(connection);
+    const url = `https://${connection.shopifyStore}/admin/api/${this.apiVersion}/graphql.json`;
+    // Shopify's `query` filter on the orders connection: standard search
+    // syntax. `processed_at:>=X processed_at:<Y` gives a half-open window.
+    // We also exclude tests (`test:false`) so dev-store noise doesn't pad
+    // the count.
+    const queryString = `processed_at:>='${args.fromInclusive}' processed_at:<'${args.toExclusive}' test:false`;
+    let cursor: string | null = null;
+    let count = 0;
+    const totals = new Map<string, number>();
+    // Bound the page count so a misconfigured query can't pull the entire
+    // store. 40 pages × 250 per page = up to 10,000 orders/day, generous
+    // for any dev store.
+    const maxPages = 40;
+    for (let i = 0; i < maxPages; i++) {
+      const res = await this.fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': accessToken,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          query: ORDERS_AGGREGATE_QUERY,
+          variables: { first: 250, query: queryString, after: cursor },
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(
+          `ShopifyHttpGateway.getDailyOrderAggregate: ${connection.shopifyStore} returned ${res.status}: ${text}`,
+        );
+      }
+      const json = (await res.json()) as {
+        data?: {
+          orders?: {
+            edges?: ReadonlyArray<{
+              cursor: string;
+              node: { totalPriceSet: { presentmentMoney: { amount: string; currencyCode: string } } };
+            }>;
+            pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+          } | null;
+        };
+        errors?: ReadonlyArray<{ message?: string }>;
+      };
+      if (json.errors && json.errors.length > 0) {
+        throw new Error(
+          `ShopifyHttpGateway.getDailyOrderAggregate: GraphQL errors: ${json.errors
+            .map((e) => e.message ?? '?')
+            .join('; ')}`,
+        );
+      }
+      const edges = json.data?.orders?.edges ?? [];
+      for (const e of edges) {
+        count += 1;
+        const m = e.node.totalPriceSet.presentmentMoney;
+        const amt = Number.parseFloat(m.amount);
+        if (Number.isFinite(amt)) totals.set(m.currencyCode, (totals.get(m.currencyCode) ?? 0) + amt);
+      }
+      const pageInfo = json.data?.orders?.pageInfo;
+      if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
+      cursor = pageInfo.endCursor;
+    }
+    const totalsByCurrency: Record<string, string> = {};
+    for (const [cur, amt] of totals) totalsByCurrency[cur] = amt.toFixed(2);
+    return { count, totalsByCurrency };
+  }
+
   async tagOrder(
     connection: Connection,
     orderGid: string,
@@ -213,6 +290,18 @@ export class ShopifyHttpGateway implements ShopifyGateway {
 }
 
 // --- GraphQL queries + response shapes -------------------------------------
+
+const ORDERS_AGGREGATE_QUERY = `
+  query OrdersAggregate($first: Int!, $query: String!, $after: String) {
+    orders(first: $first, query: $query, sortKey: PROCESSED_AT, reverse: false, after: $after) {
+      edges {
+        cursor
+        node { totalPriceSet { presentmentMoney { amount currencyCode } } }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
 
 const ORDERS_UPDATED_SINCE_QUERY = `
   query OrdersUpdatedSince($first: Int!, $query: String!) {

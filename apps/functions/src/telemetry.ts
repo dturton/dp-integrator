@@ -63,6 +63,13 @@ export interface Telemetry {
     flow: string;
     message: string;
   }): void;
+  trackReconciliationDrift(args: {
+    environment: Environment;
+    connectionId: string;
+    businessDate: string;
+    countDiff: number;
+    totalDiff: string;
+  }): void;
   /**
    * Best-effort flush so a fast-completing function invocation doesn't
    * lose its last batch of telemetry. Errors are swallowed.
@@ -171,6 +178,27 @@ class AppInsightsTelemetry implements Telemetry {
     this.client.trackEvent({ name: 'dpi.auth_error', properties: props });
   }
 
+  trackReconciliationDrift(args: {
+    environment: Environment;
+    connectionId: string;
+    businessDate: string;
+    countDiff: number;
+    totalDiff: string;
+  }): void {
+    const props = {
+      ...baseProps(args.environment, args.connectionId),
+      businessDate: args.businessDate,
+      countDiff: String(args.countDiff),
+      totalDiff: args.totalDiff,
+    };
+    this.client.trackMetric({
+      name: 'dpi.reconciliation.drift',
+      value: 1,
+      properties: props,
+    });
+    this.client.trackEvent({ name: 'dpi.reconciliation.drift', properties: props });
+  }
+
   async flush(): Promise<void> {
     try {
       await this.client.flush();
@@ -186,6 +214,7 @@ class NoopTelemetry implements Telemetry {
   trackIgnored(): void {}
   trackCatchupPoll(): void {}
   trackAuthError(): void {}
+  trackReconciliationDrift(): void {}
   async flush(): Promise<void> {}
 }
 

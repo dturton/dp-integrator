@@ -1,5 +1,10 @@
 import type { Connection } from '@dpi/core';
-import { OrderNotFoundError, type OrderSummary, type ShopifyGateway } from './gateway.js';
+import {
+  OrderNotFoundError,
+  type OrderDailyAggregate,
+  type OrderSummary,
+  type ShopifyGateway,
+} from './gateway.js';
 import type { ShopifyOrder } from './order.js';
 
 /**
@@ -81,6 +86,32 @@ export class FakeShopifyGateway implements ShopifyGateway {
       .slice(0, limit)
       .map((o) => ({ id: o.id, updatedAt: o.updatedAt }));
     return matching;
+  }
+
+  async getDailyOrderAggregate(
+    _connection: Connection,
+    args: { fromInclusive: string; toExclusive: string },
+  ): Promise<OrderDailyAggregate> {
+    const fromMs = Date.parse(args.fromInclusive);
+    const toMs = Date.parse(args.toExclusive);
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs)) {
+      throw new Error('FakeShopifyGateway.getDailyOrderAggregate: window bounds must be ISO dates');
+    }
+    const matching = Array.from(this.orders.values()).filter((o) => {
+      if (o.test) return false;
+      const t = Date.parse(o.processedAt);
+      return t >= fromMs && t < toMs;
+    });
+    const totals = new Map<string, number>();
+    for (const o of matching) {
+      const cur = o.totalPrice.currencyCode;
+      const amount = Number.parseFloat(o.totalPrice.amount);
+      if (!Number.isFinite(amount)) continue;
+      totals.set(cur, (totals.get(cur) ?? 0) + amount);
+    }
+    const totalsByCurrency: Record<string, string> = {};
+    for (const [cur, amt] of totals) totalsByCurrency[cur] = amt.toFixed(2);
+    return { count: matching.length, totalsByCurrency };
   }
 }
 
