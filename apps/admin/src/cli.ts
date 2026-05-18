@@ -29,6 +29,7 @@
  *   replay <gid>      Clear an error row + republish the webhook
  *   reasons <gid>     Full park history for one order
  */
+import { attemptsCommand } from './commands/attempts.js';
 import { parkedCommand } from './commands/parked.js';
 import { recentCommand } from './commands/recent.js';
 import { replayCommand } from './commands/replay.js';
@@ -41,10 +42,12 @@ Usage: dpi <command> [options]
 Commands:
   status                  One-screen overview of the integration's state
   parked [--limit N]      List parked orders (xref status='error') with reasons
-  recent [opts]           Tail order_sync_log — per-order ledger (order #, email, totals, NS link, status)
+  recent [opts]           Tail order_sync_log — per-order ledger (order #, email, totals, tries, NS link, status)
       --limit N             default 20
       --connection <id>     filter to one connection
       --status <s>          filter to imported | parked | ignored
+  attempts <gid|id>       Full Service Bus delivery timeline for one order (M2-D)
+      --connection <id>     required — connection id (e.g. acme-us)
   replay <gid|id>         Re-publish an order through the import pipeline
       --connection <id>     required — connection id from \`dpi parked\` output
       --force               override the refusal when xref status='synced'
@@ -75,6 +78,9 @@ async function main(): Promise<void> {
       return;
     case 'recent':
       await recentCommand(rest);
+      return;
+    case 'attempts':
+      await attemptsCommand(rest);
       return;
     case 'replay':
       await replayCommand(rest);

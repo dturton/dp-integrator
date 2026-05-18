@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   InMemoryConnectionsRepo,
+  InMemoryOrderAttemptStore,
+  InMemoryOrderSyncLogStore,
+  InMemoryPayloadStore,
   InMemoryXrefStore,
   type Connection,
 } from '@dpi/core';
@@ -10,6 +13,7 @@ import { FakeShopifyGateway, makeFakeOrder, type ShopifyOrder } from '@dpi/shopi
 import type { OrderWebhookMessage } from '../src/messages.js';
 import {
   handleOrderMessage,
+  type AttemptContext,
   type OrderHandlerDeps,
 } from '../src/triggers/order-import-handler.js';
 
@@ -380,5 +384,182 @@ describe('handleOrderMessage — Slice D5 full pipeline', () => {
       throw new Error('store-x.myshopify.com returned 503: upstream busy');
     };
     await expect(handleOrderMessage(deps, makeMessage())).rejects.toThrow(/503/);
+  });
+});
+
+describe('handleOrderMessage — Slice M2-D retry visibility + payload archive', () => {
+  function attemptCtx(overrides: Partial<AttemptContext> = {}): AttemptContext {
+    return {
+      deliveryCount: 1,
+      sbMessageId: 'sb-msg-1',
+      sbSessionId: `${acme.connectionId}:gid://shopify/Order/12345`,
+      startedAt: new Date('2026-05-17T10:00:00Z'),
+      ...overrides,
+    };
+  }
+
+  it('happy path records one attempt with payload URI + digest + bumps order_sync_log retry fields', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const { deps } = buildDeps({ order });
+    const orderAttemptStore = new InMemoryOrderAttemptStore();
+    const outboundPayloadStore = new InMemoryPayloadStore();
+    const orderSyncLog = new InMemoryOrderSyncLogStore();
+    const wired: OrderHandlerDeps = { ...deps, orderAttemptStore, outboundPayloadStore, orderSyncLog };
+
+    const outcome = await handleOrderMessage(wired, makeMessage(), attemptCtx());
+    expect(outcome.kind).toBe('imported');
+
+    const rows = await orderAttemptStore.listByOrderGid({
+      environment: 'dev', connectionId: acme.connectionId, shopifyOrderGid: 'gid://shopify/Order/12345',
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      deliveryCount: 1,
+      outcome: 'imported',
+      sbMessageId: 'sb-msg-1',
+      inboundEnvelopeUri: 'https://blob.example.test/inbound/x.json',
+    });
+    expect(rows[0]?.outboundPayloadUri).toMatch(/^mem:\/\/outbound\//);
+    expect(rows[0]?.payloadDigest).toMatchObject({
+      tranId: expect.any(String),
+      lineCount: 1,
+      subsidiaryId: '1',
+    });
+    expect(outboundPayloadStore.putCount()).toBe(1);
+
+    // order_sync_log denormalization
+    const log = await orderSyncLog.findByOrderGid({
+      environment: 'dev', connectionId: acme.connectionId, shopifyOrderGid: 'gid://shopify/Order/12345',
+    });
+    expect(log?.attemptCount).toBe(1);
+    expect(log?.lastDeliveryCount).toBe(1);
+    expect(log?.lastOutboundPayloadUri).toMatch(/^mem:\/\/outbound\//);
+    expect(log?.lastInboundEnvelopeUri).toBe('https://blob.example.test/inbound/x.json');
+  });
+
+  it('park at mapping → attempt outcome=parked, no outbound payload (never reached NS)', async () => {
+    // Order has a discount but the connection lacks defaultDiscountItemId → mapping parks.
+    const order = makeFakeOrder({
+      id: 'gid://shopify/Order/12345',
+      totalDiscounts: { amount: '5.00', currencyCode: 'USD' },
+    });
+    const { deps } = buildDeps({ order });
+    const orderAttemptStore = new InMemoryOrderAttemptStore();
+    const outboundPayloadStore = new InMemoryPayloadStore();
+    const wired: OrderHandlerDeps = { ...deps, orderAttemptStore, outboundPayloadStore };
+
+    const outcome = await handleOrderMessage(wired, makeMessage(), attemptCtx());
+    expect(outcome.kind).toBe('parked');
+
+    const rows = await orderAttemptStore.listByOrderGid({
+      environment: 'dev', connectionId: acme.connectionId, shopifyOrderGid: 'gid://shopify/Order/12345',
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      outcome: 'parked',
+      stage: 'mapping',
+      errorClass: 'unmapped_construct',
+    });
+    expect(rows[0]?.outboundPayloadUri).toBeUndefined();
+    expect(rows[0]?.payloadDigest).toBeUndefined();
+    // Blob store was never invoked — pipeline parked before the NS write.
+    expect(outboundPayloadStore.putCount()).toBe(0);
+  });
+
+  it('records the delivery_count from attemptCtx (redelivery → row says 3)', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const { deps } = buildDeps({ order });
+    const orderAttemptStore = new InMemoryOrderAttemptStore();
+    const orderSyncLog = new InMemoryOrderSyncLogStore();
+    const wired: OrderHandlerDeps = { ...deps, orderAttemptStore, orderSyncLog };
+
+    await handleOrderMessage(wired, makeMessage(), attemptCtx({ deliveryCount: 3 }));
+
+    const rows = await orderAttemptStore.listByOrderGid({
+      environment: 'dev', connectionId: acme.connectionId, shopifyOrderGid: 'gid://shopify/Order/12345',
+    });
+    expect(rows[0]?.deliveryCount).toBe(3);
+    const log = await orderSyncLog.findByOrderGid({
+      environment: 'dev', connectionId: acme.connectionId, shopifyOrderGid: 'gid://shopify/Order/12345',
+    });
+    expect(log?.attemptCount).toBe(3);
+    expect(log?.lastDeliveryCount).toBe(3);
+  });
+
+  it('swallows outbound blob-store failures — NS upsert + attempt row still happen, outbound URI is null', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const { deps, ns } = buildDeps({ order });
+    const orderAttemptStore = new InMemoryOrderAttemptStore();
+    const outboundPayloadStore = new InMemoryPayloadStore();
+    outboundPayloadStore.failNext(new Error('blob 503 — Azure busy'));
+    const wired: OrderHandlerDeps = { ...deps, orderAttemptStore, outboundPayloadStore };
+
+    const outcome = await handleOrderMessage(wired, makeMessage(), attemptCtx());
+    expect(outcome.kind).toBe('imported');
+    // NS upsert happened despite the blob outage.
+    expect(ns.getRecords(acme.nsAccountId, 'salesorder' as never).size).toBe(1);
+    const rows = await orderAttemptStore.listByOrderGid({
+      environment: 'dev', connectionId: acme.connectionId, shopifyOrderGid: 'gid://shopify/Order/12345',
+    });
+    expect(rows[0]?.outcome).toBe('imported');
+    expect(rows[0]?.outboundPayloadUri).toBeUndefined();
+    // Digest still built — it's derived from the in-memory payload, blob-independent.
+    expect(rows[0]?.payloadDigest).toBeDefined();
+  });
+
+  it('short-circuit redelivery (already_synced) still records an attempt row with no payload URIs', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const { deps } = buildDeps({ order });
+    const orderAttemptStore = new InMemoryOrderAttemptStore();
+    const outboundPayloadStore = new InMemoryPayloadStore();
+    const wired: OrderHandlerDeps = { ...deps, orderAttemptStore, outboundPayloadStore };
+
+    // First delivery: imports normally.
+    await handleOrderMessage(wired, makeMessage(), attemptCtx({ deliveryCount: 1 }));
+    // Redelivery hits the already_synced short-circuit on the xref claim.
+    await handleOrderMessage(wired, makeMessage(), attemptCtx({ deliveryCount: 2 }));
+
+    const rows = await orderAttemptStore.listByOrderGid({
+      environment: 'dev', connectionId: acme.connectionId, shopifyOrderGid: 'gid://shopify/Order/12345',
+    });
+    expect(rows).toHaveLength(2);
+    // Most-recent first (listByOrderGid sorts deliveryCount desc).
+    expect(rows[0]).toMatchObject({ deliveryCount: 2, outcome: 'already_synced' });
+    expect(rows[0]?.outboundPayloadUri).toBeUndefined();
+    expect(rows[0]?.payloadDigest).toBeUndefined();
+    expect(rows[1]).toMatchObject({ deliveryCount: 1, outcome: 'imported' });
+    // Blob put fired exactly once — for the imported attempt, not the short-circuit.
+    expect(outboundPayloadStore.putCount()).toBe(1);
+  });
+
+  it('transient throw still records an attempt row (outcome=transient_throw) before re-throwing', async () => {
+    const { deps, shopify } = buildDeps();
+    (shopify as unknown as { getOrder: typeof shopify.getOrder }).getOrder = async () => {
+      throw new Error('store-x.myshopify.com returned 503: upstream busy');
+    };
+    const orderAttemptStore = new InMemoryOrderAttemptStore();
+    const wired: OrderHandlerDeps = { ...deps, orderAttemptStore };
+
+    await expect(handleOrderMessage(wired, makeMessage(), attemptCtx({ deliveryCount: 2 }))).rejects.toThrow(/503/);
+
+    const rows = await orderAttemptStore.listByOrderGid({
+      environment: 'dev', connectionId: acme.connectionId, shopifyOrderGid: 'gid://shopify/Order/12345',
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      deliveryCount: 2,
+      outcome: 'transient_throw',
+      errorClass: 'transient',
+    });
+    expect(rows[0]?.detail).toMatch(/503/);
+  });
+
+  it('no attempt row written when orderAttemptStore is not wired (back-compat)', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const { deps } = buildDeps({ order });
+    // No orderAttemptStore in deps.
+    const outcome = await handleOrderMessage(deps, makeMessage(), attemptCtx());
+    expect(outcome.kind).toBe('imported');
+    // Nothing to assert beyond "doesn't throw" — the store isn't there to read from.
   });
 });

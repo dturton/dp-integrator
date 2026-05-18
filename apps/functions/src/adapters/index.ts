@@ -10,6 +10,8 @@ export { buildPgPool, type PgPoolConfig } from './pg-pool.js';
 export { PostgresXrefStore } from './postgres-xref-store.js';
 export { PostgresErrorStore } from './postgres-error-store.js';
 export { PostgresOrderSyncLogStore } from './postgres-order-sync-log-store.js';
+export { PostgresOrderAttemptStore } from './postgres-order-attempt-store.js';
+export { BlobPayloadStore } from './blob-payload-store.js';
 export { PostgresSyncWatermarkStore } from './postgres-sync-watermark-store.js';
 export {
   PostgresLookupResolver,

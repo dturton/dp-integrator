@@ -1,5 +1,5 @@
 import { buildPool } from '../lib/db.js';
-import { dim, heading, renderTable, statusColor } from '../lib/format.js';
+import { dim, heading, red, renderTable, statusColor, yellow } from '../lib/format.js';
 
 /**
  * `dpi recent [--limit N] [--connection id] [--status imported|parked|ignored]`
@@ -53,11 +53,13 @@ export async function recentCommand(argv: readonly string[]): Promise<void> {
       ignored_reason: string | null;
       synced_at: string | null;
       updated_at: string;
+      attempt_count: number | null;
     }>(
       `SELECT shopify_order_id, shopify_order_name, customer_email,
               currency_code, total_price::text, total_discounts::text,
               status, ns_internal_id, park_stage, park_detail, ignored_reason,
-              synced_at::text, updated_at::text
+              synced_at::text, updated_at::text,
+              attempt_count
          FROM order_sync_log
         WHERE ${clauses.join(' AND ')}
         ORDER BY COALESCE(synced_at, updated_at) DESC
@@ -84,6 +86,7 @@ export async function recentCommand(argv: readonly string[]): Promise<void> {
             total,
             discount: discount || dim('-'),
             status: statusColor(rowStatus(row.status)),
+            tries: formatTries(row.attempt_count, row.status),
             ns: row.ns_internal_id ? `SO ${row.ns_internal_id}` : dim('-'),
             note: note ?? dim('-'),
             at: (row.synced_at ?? row.updated_at).replace('T', ' ').slice(0, 19),
@@ -119,6 +122,19 @@ function noteFor(row: {
     return row.ignored_reason;
   }
   return undefined;
+}
+
+function formatTries(n: number | null, status: string): string {
+  // M2-D — highlight non-first-try outcomes so operators notice "this one
+  // took 4 retries" at a glance. First-try success stays dim so the eye
+  // skips it. Retried-and-parked is red; retried-then-imported is yellow
+  // (we made it eventually, but the run was noisy).
+  const v = n ?? 0;
+  const label = String(v || 1);
+  if (v <= 1) return dim(label);
+  if (status === 'parked') return red(label);
+  if (status === 'imported') return yellow(label);
+  return label;
 }
 
 function formatMoney(amount: string | null, currency: string | null): string {

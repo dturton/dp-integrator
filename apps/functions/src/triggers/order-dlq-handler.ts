@@ -6,6 +6,8 @@ import type {
   ConnectionsRepo,
   Environment,
   ErrorStore,
+  OrderAttemptStore,
+  OrderSyncLogStore,
 } from '@dpi/core';
 import { dedupKey } from '@dpi/core';
 import type { OrderWebhookMessage } from '../messages.js';
@@ -39,6 +41,21 @@ export interface DlqHandlerDeps {
   readonly environment: Environment;
   readonly connections: ConnectionsRepo;
   readonly errorStore: ErrorStore | undefined;
+  /**
+   * M2-D: when wired, the DLQ handler also writes a final `order_attempt`
+   * row with `outcome='quarantined'` so the timeline shows "10 attempts
+   * then DLQ" rather than abruptly ending at the last transient. Optional
+   * for back-compat with pre-D bootstraps / tests.
+   */
+  readonly orderAttemptStore?: OrderAttemptStore;
+  /**
+   * M2-D: when wired, the DLQ handler bumps the sync-log's
+   * `attempt_count` to the SB-authoritative deliveryCount so the list
+   * view shows the order as "tried Nx then quarantined" even if no
+   * order_sync_log row existed (rare; would mean the order parked before
+   * sync-log write).
+   */
+  readonly orderSyncLog?: OrderSyncLogStore;
 }
 
 export type DlqOutcome =
@@ -142,6 +159,59 @@ export async function handleDeadLetteredOrder(
   // is reserved for the eventual non-DLQ failure path (a future slice will
   // wire that in).
   await deps.errorStore.updateStatus(row.id, 'quarantined');
+
+  // M2-D — write a final attempt row so the timeline shows the quarantine.
+  // The SB binding's deliveryCount on a DLQ message is the count when it
+  // gave up (typically the `maxDeliveryCount`, e.g. 10). Best-effort: a
+  // store outage here doesn't block the error-record write that already
+  // succeeded.
+  if (deps.orderAttemptStore && deliveryCount > 0) {
+    const now = new Date();
+    try {
+      await deps.orderAttemptStore.record({
+        environment: env.environment,
+        connectionId: env.connectionId,
+        shopifyOrderGid: env.orderGid,
+        deliveryCount,
+        outcome: 'quarantined',
+        errorClass: 'unknown',
+        detail: summary,
+        ...(env.envelopeBlobUri && env.envelopeBlobUri.length > 0
+          ? { inboundEnvelopeUri: env.envelopeBlobUri }
+          : {}),
+        startedAt: now,
+        finishedAt: now,
+        durationMs: 0,
+      });
+    } catch {
+      // Swallow — error_records already has the quarantine row above.
+    }
+  }
+  // Also bump the sync-log's denormalized attempt count if a row exists, so
+  // `dpi recent` shows "tried 10x" on the quarantined order.
+  if (deps.orderSyncLog && deliveryCount > 0) {
+    try {
+      const existing = await deps.orderSyncLog.findByOrderGid({
+        environment: env.environment,
+        connectionId: env.connectionId,
+        shopifyOrderGid: env.orderGid,
+      });
+      if (existing) {
+        const numericTail = /\/(\d+)$/.exec(env.orderGid)?.[1] ?? env.orderGid;
+        await deps.orderSyncLog.upsert({
+          environment: env.environment,
+          connectionId: env.connectionId,
+          shopifyOrderGid: env.orderGid,
+          shopifyOrderId: numericTail,
+          status: existing.status,
+          attemptCount: deliveryCount,
+          lastDeliveryCount: deliveryCount,
+        });
+      }
+    } catch {
+      // Swallow — best-effort denormalization.
+    }
+  }
 
   return { kind: 'recorded', errorId: row.id, dedup };
 }

@@ -73,6 +73,22 @@ export {
   type OrderSyncLogStore,
 } from './order-sync-log/order-sync-log-store.js';
 
+// Order attempts (per-Service-Bus-delivery audit trail — retry visibility + payload links)
+export {
+  InMemoryOrderAttemptStore,
+  type OrderAttempt,
+  type OrderAttemptInput,
+  type OrderAttemptOutcome,
+  type OrderAttemptStore,
+} from './order-attempt/index.js';
+
+// Payload archive (outbound NS payload blob storage)
+export {
+  InMemoryPayloadStore,
+  type PayloadStore,
+  type PayloadStoreContext,
+} from './payload-store/index.js';
+
 // Replay (M2)
 export {
   requestReplay,

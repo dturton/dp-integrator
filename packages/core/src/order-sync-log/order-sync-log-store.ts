@@ -46,6 +46,17 @@ export interface OrderSyncLog {
   readonly syncedAt?: Date;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+
+  /**
+   * Denormalized retry telemetry (slice M2-D). These mirror the most recent
+   * `order_attempt` row so the list view doesn't need a JOIN. `attemptCount`
+   * is the SB-authoritative deliveryCount of the latest attempt (0 only
+   * pre-D for rows that never got their first attempt row written).
+   */
+  readonly attemptCount?: number;
+  readonly lastDeliveryCount?: number;
+  readonly lastOutboundPayloadUri?: string;
+  readonly lastInboundEnvelopeUri?: string;
 }
 
 export interface OrderSyncLogInput {
@@ -80,6 +91,12 @@ export interface OrderSyncLogInput {
   readonly ignoredReason?: string;
 
   readonly syncedAt?: Date;
+
+  /** Retry telemetry — see `OrderSyncLog` for semantics. */
+  readonly attemptCount?: number;
+  readonly lastDeliveryCount?: number;
+  readonly lastOutboundPayloadUri?: string;
+  readonly lastInboundEnvelopeUri?: string;
 }
 
 export interface OrderSyncLogListFilter {
@@ -143,6 +160,10 @@ export class InMemoryOrderSyncLogStore implements OrderSyncLogStore {
       ...(input.parkErrorClass !== undefined ? { parkErrorClass: input.parkErrorClass } : {}),
       ...(input.ignoredReason !== undefined ? { ignoredReason: input.ignoredReason } : {}),
       ...(input.syncedAt !== undefined ? { syncedAt: input.syncedAt } : {}),
+      ...(input.attemptCount !== undefined ? { attemptCount: input.attemptCount } : {}),
+      ...(input.lastDeliveryCount !== undefined ? { lastDeliveryCount: input.lastDeliveryCount } : {}),
+      ...(input.lastOutboundPayloadUri !== undefined ? { lastOutboundPayloadUri: input.lastOutboundPayloadUri } : {}),
+      ...(input.lastInboundEnvelopeUri !== undefined ? { lastInboundEnvelopeUri: input.lastInboundEnvelopeUri } : {}),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };

@@ -10,8 +10,12 @@ import {
   type Environment,
   type ErrorClass,
   type ErrorStore,
+  type OrderAttemptInput,
+  type OrderAttemptOutcome,
+  type OrderAttemptStore,
   type OrderSyncLogInput,
   type OrderSyncLogStore,
+  type PayloadStore,
   type XrefStore,
 } from '@dpi/core';
 import type { LookupResolver, MapDeriveRegistry } from '@dpi/mapping-engine';
@@ -88,6 +92,33 @@ export interface OrderHandlerDeps {
    * re-fetch from either system.
    */
   readonly orderSyncLog?: OrderSyncLogStore;
+  /**
+   * Per-Service-Bus-delivery audit trail (slice M2-D). When wired the handler
+   * emits one row per delivery — including short-circuit redeliveries
+   * (`already_synced` / `already_claimed`) so the timeline explains every
+   * SB callback. Optional so tests / pre-D bootstraps omit it.
+   */
+  readonly orderAttemptStore?: OrderAttemptStore;
+  /**
+   * Outbound NS-payload archive (slice M2-D). When wired, the final
+   * NS-bound JSON is written to blob storage just before the upsert call
+   * and the returned URI is stamped onto the attempt row's
+   * `outbound_payload_uri`. Blob-write failures are swallowed — debug fuel
+   * must never block the NS upsert.
+   */
+  readonly outboundPayloadStore?: PayloadStore;
+}
+
+/**
+ * Service-Bus-delivery context the runtime threads in (slice M2-D). The
+ * handler uses it to stamp `delivery_count` + timing onto the attempt row
+ * and to partition outbound-payload blobs by attempt number.
+ */
+export interface AttemptContext {
+  readonly deliveryCount: number;
+  readonly sbMessageId?: string;
+  readonly sbSessionId?: string;
+  readonly startedAt: Date;
 }
 
 export type OrderHandlerOutcome =
@@ -102,6 +133,7 @@ export type OrderHandlerOutcome =
 export async function handleOrderMessage(
   deps: OrderHandlerDeps,
   message: unknown,
+  attemptCtx?: AttemptContext,
 ): Promise<OrderHandlerOutcome> {
   // 1. Parse + validate
   const parsed = parseOrderWebhookMessage(message);
@@ -134,14 +166,24 @@ export async function handleOrderMessage(
     targetExternal: msg.orderGid,
   });
 
+  // Short-circuit redeliveries still get an attempt row — operators looking at
+  // the timeline want to see "delivery 2 happened, did nothing because already
+  // synced." Cheap and disambiguates webhook duplicate floods from real
+  // retries.
   if (claim.outcome === 'already_synced') {
-    return { kind: 'already_synced', connectionId: connection.connectionId, orderGid: msg.orderGid };
+    const o: OrderHandlerOutcome = { kind: 'already_synced', connectionId: connection.connectionId, orderGid: msg.orderGid };
+    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined);
+    return o;
   }
   if (claim.outcome === 'already_claimed') {
-    return { kind: 'already_claimed', connectionId: connection.connectionId, orderGid: msg.orderGid };
+    const o: OrderHandlerOutcome = { kind: 'already_claimed', connectionId: connection.connectionId, orderGid: msg.orderGid };
+    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined);
+    return o;
   }
   if (claim.outcome === 'ignored') {
-    return { kind: 'ignored', connectionId: connection.connectionId, orderGid: msg.orderGid };
+    const o: OrderHandlerOutcome = { kind: 'ignored', connectionId: connection.connectionId, orderGid: msg.orderGid };
+    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined);
+    return o;
   }
   // claim.outcome === 'claimed' — proceed. Everything from here on is wrapped
   // in classifyAndPark below so that unhandled throws are routed through the
@@ -150,7 +192,17 @@ export async function handleOrderMessage(
   //
   // `order` lives outside the try so the catch's classifier can snapshot it
   // into the sync log when the throw happened after getOrder returned.
+  //
+  // M2-D: the post-claim body is wrapped in a try/finally so every terminal
+  // path (return *or* re-throw via classifyAndRoute) writes exactly one
+  // `order_attempt` row. `outcome` is set as each return path resolves;
+  // `throwErr` captures the rethrown error for transient/auth paths.
   let order: ShopifyOrder | undefined;
+  let outcome: OrderHandlerOutcome | undefined;
+  let throwErr: unknown;
+  let outboundPayloadUri: string | undefined;
+  let payloadDigest: Record<string, unknown> | undefined;
+  const finish = (o: OrderHandlerOutcome): OrderHandlerOutcome => (outcome = o);
   try {
     // 3. Re-fetch authoritative order
     order = await deps.shopify.getOrder(connection, msg.orderGid);
@@ -163,14 +215,15 @@ export async function handleOrderMessage(
         status: 'ignored',
         order,
         ignoredReason: elig.reason,
+        attemptCtx,
       });
-      return {
+      return finish({
         kind: 'ignored_by_eligibility',
         connectionId: connection.connectionId,
         orderGid: msg.orderGid,
         reason: elig.reason,
         ...(elig.detail ? { detail: elig.detail } : {}),
-      };
+      });
     }
 
     // 5. Customer match/create. Pass the order's billing/shipping addresses
@@ -198,12 +251,13 @@ export async function handleOrderMessage(
       ...(deps.derives ? { derives: deps.derives } : { derives: defaultDeriveRegistry() }),
     });
     if (!payloadResult.ok) {
-      return parkOutcome(deps, dedupKey, connection, msg, {
+      return finish(await parkOutcome(deps, dedupKey, connection, msg, {
         stage: 'mapping',
         detail: payloadResult.parked.detail,
         errorClass: 'unmapped_construct',
         order,
-      });
+        attemptCtx,
+      }));
     }
     const draft: NsOrderPayload = payloadResult.payload;
 
@@ -217,12 +271,13 @@ export async function handleOrderMessage(
     // 8. Balancing line
     const balanced = applyBalancing(taxApplied, order);
     if (!balanced.ok) {
-      return parkOutcome(deps, dedupKey, connection, msg, {
+      return finish(await parkOutcome(deps, dedupKey, connection, msg, {
         stage: 'balancing',
         detail: balanced.parked.detail,
         errorClass: 'data',
         order,
-      });
+        attemptCtx,
+      }));
     }
     const balancedPayload = balanced.payload.payload;
 
@@ -236,17 +291,37 @@ export async function handleOrderMessage(
         : {}),
     });
     if (!resolved.ok) {
-      return parkOutcome(deps, dedupKey, connection, msg, {
+      return finish(await parkOutcome(deps, dedupKey, connection, msg, {
         stage: 'item_resolution',
         detail: resolved.parked.detail,
         errorClass: 'unmapped_construct',
         order,
-      });
+        attemptCtx,
+      }));
     }
     const finalPayload = resolved.payload;
 
-    // 10. NS upsert keyed on Shopify order GID
+    // 9b (M2-D). Archive the outbound NS payload + build the inline digest
+    // BEFORE the upsert so the artifact survives even if NS subsequently
+    // throws. Blob put failures are swallowed — debug fuel must never block
+    // the source-of-truth write.
     const recordType = netsuiteOrderRecordType(connection);
+    if (deps.outboundPayloadStore && attemptCtx) {
+      outboundPayloadUri = await deps.outboundPayloadStore
+        .put(finalPayload as Record<string, unknown>, {
+          environment: msg.environment,
+          connectionId: connection.connectionId,
+          shopifyOrderGid: msg.orderGid,
+          deliveryCount: attemptCtx.deliveryCount,
+          nsAccountId: connection.nsAccountId,
+          nsRecordType: recordType,
+          attemptStartedAt: attemptCtx.startedAt,
+        })
+        .catch(() => undefined);
+    }
+    payloadDigest = buildPayloadDigest(finalPayload as Record<string, unknown>);
+
+    // 10. NS upsert keyed on Shopify order GID
     const upserted = await deps.ns.upsertByExternalId({
       nsAccountId: connection.nsAccountId,
       recordType: recordType as Parameters<NetSuiteGateway['upsertByExternalId']>[0]['recordType'],
@@ -268,6 +343,8 @@ export async function handleOrderMessage(
       nsRecordType: recordType,
       nsInternalId: upserted.internalId,
       syncedAt: now,
+      attemptCtx,
+      lastOutboundPayloadUri: outboundPayloadUri,
     });
 
     // 12. (slice E2) Optional NS→Shopify write-back: tag the Shopify order
@@ -303,16 +380,23 @@ export async function handleOrderMessage(
       }
     }
 
-    return {
+    return finish({
       kind: 'imported',
       connectionId: connection.connectionId,
       orderGid: msg.orderGid,
       targetId: upserted.internalId,
       created: upserted.created,
       customer,
-    };
+    });
   } catch (err) {
-    return classifyAndRoute(deps, dedupKey, connection, msg, err, order);
+    try {
+      return finish(await classifyAndRoute(deps, dedupKey, connection, msg, err, order, attemptCtx));
+    } catch (rethrown) {
+      throwErr = rethrown;
+      throw rethrown;
+    }
+  } finally {
+    await recordAttempt(deps, attemptCtx, msg, connection, outcome, throwErr, outboundPayloadUri, payloadDigest);
   }
 }
 
@@ -341,6 +425,7 @@ async function classifyAndRoute(
   msg: OrderWebhookMessage,
   err: unknown,
   order: ShopifyOrder | undefined,
+  attemptCtx: AttemptContext | undefined,
 ): Promise<OrderHandlerOutcome> {
   const errorClass = classifyHandlerError(err);
   const detail = err instanceof Error ? err.message : String(err);
@@ -375,6 +460,7 @@ async function classifyAndRoute(
     errorClass,
     ...(stack !== undefined ? { stack } : {}),
     ...(order !== undefined ? { order } : {}),
+    attemptCtx,
   });
 }
 
@@ -385,6 +471,8 @@ interface ParkInput {
   readonly stack?: string;
   /** Available when the throw / mapping-park happened after getOrder; absent for the OrderNotFoundError + pre-fetch paths. */
   readonly order?: ShopifyOrder;
+  /** Carries SB-delivery telemetry through to the sync log (M2-D). */
+  readonly attemptCtx?: AttemptContext;
 }
 
 /**
@@ -419,6 +507,7 @@ async function parkOutcome(
     parkStage: park.stage,
     parkDetail: park.detail,
     parkErrorClass: park.errorClass,
+    ...(park.attemptCtx !== undefined ? { attemptCtx: park.attemptCtx } : {}),
   });
   return {
     kind: 'parked',
@@ -449,6 +538,10 @@ interface SyncLogShape {
   readonly parkDetail?: string;
   readonly parkErrorClass?: string;
   readonly ignoredReason?: string;
+  /** M2-D — drives the new attempt-count + last-* URI denormalization on order_sync_log. */
+  readonly attemptCtx?: AttemptContext;
+  /** Last outbound NS payload blob URI for this delivery, if archived. */
+  readonly lastOutboundPayloadUri?: string;
 }
 
 async function writeSyncLog(
@@ -486,8 +579,143 @@ async function writeSyncLog(
     ...(shape.parkDetail !== undefined ? { parkDetail: shape.parkDetail } : {}),
     ...(shape.parkErrorClass !== undefined ? { parkErrorClass: shape.parkErrorClass } : {}),
     ...(shape.ignoredReason !== undefined ? { ignoredReason: shape.ignoredReason } : {}),
+    ...(shape.attemptCtx !== undefined ? {
+      attemptCount: shape.attemptCtx.deliveryCount,
+      lastDeliveryCount: shape.attemptCtx.deliveryCount,
+    } : {}),
+    ...(shape.lastOutboundPayloadUri !== undefined ? { lastOutboundPayloadUri: shape.lastOutboundPayloadUri } : {}),
+    ...(msg.envelopeBlobUri !== undefined && msg.envelopeBlobUri.length > 0
+      ? { lastInboundEnvelopeUri: msg.envelopeBlobUri }
+      : {}),
   };
   await deps.orderSyncLog.upsert(input);
+}
+
+/**
+ * M2-D — write one row per Service Bus delivery into `order_attempt`. Called
+ * from every terminal path in `handleOrderMessage`:
+ *
+ *   - Short-circuits (already_synced / already_claimed / ignored): inline at
+ *     the claim branches.
+ *   - Post-claim happy path / inline parks / classified parks / re-thrown
+ *     transient or auth errors: via the outer `try/finally` in
+ *     `handleOrderMessage`.
+ *
+ * `attemptCtx` absent → no-op (pre-D bootstraps / tests that don't pass it).
+ * Store-write failures are swallowed and logged (best-effort observability;
+ * must not block the SB ack / NS write path).
+ */
+async function recordAttempt(
+  deps: OrderHandlerDeps,
+  attemptCtx: AttemptContext | undefined,
+  msg: OrderWebhookMessage,
+  connection: Connection,
+  outcome: OrderHandlerOutcome | undefined,
+  throwErr: unknown,
+  outboundPayloadUri: string | undefined,
+  payloadDigest: Record<string, unknown> | undefined,
+): Promise<void> {
+  if (!deps.orderAttemptStore || !attemptCtx) return;
+  const finishedAt = new Date();
+  const durationMs = Math.max(0, finishedAt.getTime() - attemptCtx.startedAt.getTime());
+  const resolved = resolveAttemptOutcome(outcome, throwErr);
+  const input: OrderAttemptInput = {
+    environment: msg.environment,
+    connectionId: connection.connectionId,
+    shopifyOrderGid: msg.orderGid,
+    deliveryCount: attemptCtx.deliveryCount,
+    ...(attemptCtx.sbMessageId ? { sbMessageId: attemptCtx.sbMessageId } : {}),
+    ...(attemptCtx.sbSessionId ? { sbSessionId: attemptCtx.sbSessionId } : {}),
+    outcome: resolved.outcome,
+    ...(resolved.stage ? { stage: resolved.stage } : {}),
+    ...(resolved.errorClass ? { errorClass: resolved.errorClass } : {}),
+    ...(resolved.detail ? { detail: resolved.detail } : {}),
+    ...(msg.envelopeBlobUri && msg.envelopeBlobUri.length > 0
+      ? { inboundEnvelopeUri: msg.envelopeBlobUri }
+      : {}),
+    ...(outboundPayloadUri ? { outboundPayloadUri } : {}),
+    ...(payloadDigest ? { payloadDigest } : {}),
+    startedAt: attemptCtx.startedAt,
+    finishedAt,
+    durationMs,
+  };
+  try {
+    await deps.orderAttemptStore.record(input);
+  } catch {
+    // Best-effort: an attempt-store outage must not block the handler's
+    // SB-ack path. The DLQ handler still catches permanent failures.
+  }
+}
+
+function resolveAttemptOutcome(
+  outcome: OrderHandlerOutcome | undefined,
+  throwErr: unknown,
+): { outcome: OrderAttemptOutcome; stage?: string; errorClass?: string; detail?: string } {
+  if (throwErr !== undefined) {
+    const errorClass = classifyHandlerError(throwErr);
+    return {
+      outcome: errorClass === 'auth' ? 'auth_throw' : 'transient_throw',
+      errorClass,
+      detail: throwErr instanceof Error ? throwErr.message : String(throwErr),
+    };
+  }
+  if (!outcome) {
+    // Defensive: should be unreachable since outcome is set on every return.
+    return { outcome: 'transient_throw', detail: 'no outcome captured' };
+  }
+  switch (outcome.kind) {
+    case 'imported':
+      return { outcome: 'imported' };
+    case 'parked':
+      return {
+        outcome: 'parked',
+        stage: outcome.stage,
+        ...(outcome.errorClass ? { errorClass: outcome.errorClass } : {}),
+        detail: outcome.detail,
+      };
+    case 'ignored_by_eligibility':
+      return {
+        outcome: 'ignored_by_eligibility',
+        detail: outcome.detail ? `${outcome.reason}: ${outcome.detail}` : outcome.reason,
+      };
+    case 'already_synced':
+      return { outcome: 'already_synced' };
+    case 'already_claimed':
+      return { outcome: 'already_claimed' };
+    case 'ignored':
+      return { outcome: 'ignored' };
+    case 'rejected':
+      return { outcome: 'rejected', errorClass: outcome.reason, detail: outcome.detail };
+  }
+}
+
+/**
+ * Small inline preview of the outbound NS payload — what the future admin
+ * UI shows on the attempt-detail page before the operator clicks through
+ * to fetch the full blob. Header refs are objects like `{ id: '<value>' }`
+ * after `wrapNsReferences`; flatten to plain ids for readability.
+ */
+function buildPayloadDigest(p: Record<string, unknown>): Record<string, unknown> {
+  const refId = (v: unknown): unknown =>
+    v && typeof v === 'object' && 'id' in (v as Record<string, unknown>)
+      ? (v as { id: unknown }).id
+      : v;
+  const itemBag = p['item'];
+  const lineCount =
+    itemBag &&
+    typeof itemBag === 'object' &&
+    Array.isArray((itemBag as { items?: unknown[] }).items)
+      ? (itemBag as { items: unknown[] }).items.length
+      : 0;
+  const digest: Record<string, unknown> = { lineCount };
+  if (p['tranId'] !== undefined) digest['tranId'] = p['tranId'];
+  if (p['externalId'] !== undefined) digest['externalId'] = p['externalId'];
+  if (p['subsidiary'] !== undefined) digest['subsidiaryId'] = refId(p['subsidiary']);
+  if (p['entity'] !== undefined) digest['entityId'] = refId(p['entity']);
+  if (p['currency'] !== undefined) digest['currencyId'] = refId(p['currency']);
+  if (p['orderStatus'] !== undefined) digest['orderStatus'] = refId(p['orderStatus']);
+  if (p['tranDate'] !== undefined) digest['tranDate'] = p['tranDate'];
+  return digest;
 }
 
 interface ParseSuccess { readonly ok: true; readonly value: OrderWebhookMessage; }
@@ -518,12 +746,25 @@ export function registerOrderImportHandler(getDeps: () => OrderHandlerDeps): voi
     connection: 'SERVICE_BUS',
     isSessionsEnabled: true,
     handler: async (message: unknown, context: InvocationContext): Promise<void> => {
-      const sessionId = context.triggerMetadata?.['sessionId'] ?? '-';
-      const deliveryCount = context.triggerMetadata?.['deliveryCount'] ?? '-';
-      const outcome = await handleOrderMessage(getDeps(), message);
+      // M2-D — capture the SB delivery telemetry on entry so the handler can
+      // emit one `order_attempt` row per delivery (including short-circuits).
+      // SB binding surfaces `deliveryCount` as 1-based; first delivery = 1.
+      const rawDelivery = context.triggerMetadata?.['deliveryCount'];
+      const deliveryCount = typeof rawDelivery === 'number'
+        ? rawDelivery
+        : Number(rawDelivery ?? 1) || 1;
+      const sessionId = context.triggerMetadata?.['sessionId'];
+      const messageId = context.triggerMetadata?.['messageId'];
+      const attemptCtx: AttemptContext = {
+        deliveryCount,
+        ...(typeof sessionId === 'string' && sessionId.length > 0 ? { sbSessionId: sessionId } : {}),
+        ...(typeof messageId === 'string' && messageId.length > 0 ? { sbMessageId: messageId } : {}),
+        startedAt: new Date(),
+      };
+      const outcome = await handleOrderMessage(getDeps(), message, attemptCtx);
       const summary = describeOutcome(outcome);
       context.log(
-        `orderImportHandler outcome=${outcome.kind} ${summary} session=${String(sessionId)} delivery=${String(deliveryCount)}`,
+        `orderImportHandler outcome=${outcome.kind} ${summary} session=${String(sessionId ?? '-')} delivery=${deliveryCount}`,
       );
     },
   });

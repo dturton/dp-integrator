@@ -30,7 +30,8 @@ export class PostgresOrderSyncLogStore implements OrderSyncLogStore {
         ns_account_id, ns_record_type, ns_internal_id, ns_tran_id,
         park_stage, park_detail, park_error_class,
         ignored_reason,
-        synced_at
+        synced_at,
+        attempt_count, last_delivery_count, last_outbound_payload_uri, last_inbound_envelope_uri
       )
       VALUES (
         $1, $2,
@@ -42,7 +43,8 @@ export class PostgresOrderSyncLogStore implements OrderSyncLogStore {
         $17, $18, $19, $20,
         $21, $22, $23,
         $24,
-        $25
+        $25,
+        COALESCE($26, 0), $27, $28, $29
       )
       ON CONFLICT (environment, connection_id, shopify_order_gid)
       DO UPDATE SET
@@ -68,6 +70,12 @@ export class PostgresOrderSyncLogStore implements OrderSyncLogStore {
         park_error_class     = EXCLUDED.park_error_class,
         ignored_reason       = EXCLUDED.ignored_reason,
         synced_at            = COALESCE(EXCLUDED.synced_at, order_sync_log.synced_at),
+        -- M2-D retry telemetry: monotonic-take-max so a late-arriving sync_log
+        -- update from an EARLIER delivery never drags attempt_count backwards.
+        attempt_count        = GREATEST(order_sync_log.attempt_count, EXCLUDED.attempt_count),
+        last_delivery_count  = COALESCE(EXCLUDED.last_delivery_count, order_sync_log.last_delivery_count),
+        last_outbound_payload_uri = COALESCE(EXCLUDED.last_outbound_payload_uri, order_sync_log.last_outbound_payload_uri),
+        last_inbound_envelope_uri = COALESCE(EXCLUDED.last_inbound_envelope_uri, order_sync_log.last_inbound_envelope_uri),
         updated_at           = NOW()
       RETURNING *
       `,
@@ -97,6 +105,10 @@ export class PostgresOrderSyncLogStore implements OrderSyncLogStore {
         input.parkErrorClass ?? null,
         input.ignoredReason ?? null,
         input.syncedAt ?? null,
+        input.attemptCount ?? null,
+        input.lastDeliveryCount ?? null,
+        input.lastOutboundPayloadUri ?? null,
+        input.lastInboundEnvelopeUri ?? null,
       ],
     );
     const row = r.rows[0];
@@ -172,6 +184,10 @@ interface OrderSyncLogDb {
   synced_at: Date | null;
   created_at: Date;
   updated_at: Date;
+  attempt_count: number | null;
+  last_delivery_count: number | null;
+  last_outbound_payload_uri: string | null;
+  last_inbound_envelope_uri: string | null;
 }
 
 function toRow(row: OrderSyncLogDb): OrderSyncLog {
@@ -202,6 +218,14 @@ function toRow(row: OrderSyncLogDb): OrderSyncLog {
     ...(row.park_error_class !== null ? { parkErrorClass: row.park_error_class } : {}),
     ...(row.ignored_reason !== null ? { ignoredReason: row.ignored_reason } : {}),
     ...(row.synced_at !== null ? { syncedAt: row.synced_at } : {}),
+    ...(row.attempt_count !== null ? { attemptCount: row.attempt_count } : {}),
+    ...(row.last_delivery_count !== null ? { lastDeliveryCount: row.last_delivery_count } : {}),
+    ...(row.last_outbound_payload_uri !== null
+      ? { lastOutboundPayloadUri: row.last_outbound_payload_uri }
+      : {}),
+    ...(row.last_inbound_envelope_uri !== null
+      ? { lastInboundEnvelopeUri: row.last_inbound_envelope_uri }
+      : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

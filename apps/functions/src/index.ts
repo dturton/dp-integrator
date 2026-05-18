@@ -60,6 +60,8 @@ registerOrderImportHandler(() => {
     lookupsFor: (connection) => new PostgresLookupResolver(pool, connection),
     ...(ctx.errorStore ? { errorStore: ctx.errorStore } : {}),
     ...(ctx.orderSyncLog ? { orderSyncLog: ctx.orderSyncLog } : {}),
+    ...(ctx.orderAttemptStore ? { orderAttemptStore: ctx.orderAttemptStore } : {}),
+    ...(ctx.outboundPayloadStore ? { outboundPayloadStore: ctx.outboundPayloadStore } : {}),
   };
 });
 
@@ -84,6 +86,8 @@ registerOrderDlqHandler(() => {
     environment: ctx.environment,
     connections: ctx.connections,
     errorStore: ctx.errorStore,
+    ...(ctx.orderAttemptStore ? { orderAttemptStore: ctx.orderAttemptStore } : {}),
+    ...(ctx.orderSyncLog ? { orderSyncLog: ctx.orderSyncLog } : {}),
   };
 });
 

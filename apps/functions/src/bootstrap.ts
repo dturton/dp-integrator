@@ -9,7 +9,9 @@ import {
   type Environment,
   type ErrorStore,
   type GovernorConfig,
+  type OrderAttemptStore,
   type OrderSyncLogStore,
+  type PayloadStore,
   type QueueProducer,
   type SecretProvider,
   type SyncWatermarkStore,
@@ -25,8 +27,10 @@ import {
 import { ShopifyHttpGateway, type ShopifyGateway } from '@dpi/shopify-client';
 import {
   BlobEnvelopeStore,
+  BlobPayloadStore,
   KeyVaultSecretProvider,
   PostgresErrorStore,
+  PostgresOrderAttemptStore,
   PostgresOrderSyncLogStore,
   PostgresSyncWatermarkStore,
   PostgresXrefStore,
@@ -65,6 +69,10 @@ export interface AppContext {
   readonly watermarkStore?: SyncWatermarkStore;
   /** Per-order ledger; powers `dpi recent` + reconciliation. */
   readonly orderSyncLog?: OrderSyncLogStore;
+  /** Slice M2-D — per-delivery attempt ledger; powers `dpi attempts` + future UI timeline. */
+  readonly orderAttemptStore?: OrderAttemptStore;
+  /** Slice M2-D — outbound NS payload archive. Independent of pgPool. */
+  readonly outboundPayloadStore?: PayloadStore;
 }
 
 let cached: AppContext | undefined;
@@ -88,6 +96,10 @@ function buildAppContext(): AppContext {
   const serviceBusTopic = process.env['SERVICE_BUS_TOPIC'] ?? 'orders-in';
   const blobAccountUrl = requireEnv('BLOB_ACCOUNT_URL');
   const inboundContainer = process.env['INBOUND_BLOB_CONTAINER'] ?? 'inbound-webhooks';
+  // M2-D — separate container for outbound NS-payload snapshots. Default
+  // distinct from inbound so retention policies don't tangle (debug-grade
+  // vs HMAC-evidence-grade).
+  const outboundContainer = process.env['DPI_OUTBOUND_PAYLOAD_CONTAINER'] ?? 'outbound-netsuite';
   const guestCustomerInternalId = process.env['GUEST_CUSTOMER_NS_ID'] ?? '1';
 
   const connectionsJson = requireEnv('DPI_CONNECTIONS_JSON');
@@ -114,13 +126,22 @@ function buildAppContext(): AppContext {
   let errorStore: ErrorStore | undefined;
   let watermarkStore: SyncWatermarkStore | undefined;
   let orderSyncLog: OrderSyncLogStore | undefined;
+  let orderAttemptStore: OrderAttemptStore | undefined;
   if (pgHost && pgDatabase && pgUser) {
     pgPool = buildPgPool({ host: pgHost, database: pgDatabase, user: pgUser });
     xrefStore = new PostgresXrefStore(pgPool);
     errorStore = new PostgresErrorStore(pgPool);
     watermarkStore = new PostgresSyncWatermarkStore(pgPool);
     orderSyncLog = new PostgresOrderSyncLogStore(pgPool);
+    orderAttemptStore = new PostgresOrderAttemptStore(pgPool);
   }
+  // M2-D outbound-payload archive — same storage account as the inbound
+  // envelopes, distinct container. Independent of pgPool: even a no-DB
+  // bootstrap can still snapshot what we send to NS.
+  const outboundPayloadStore: PayloadStore = new BlobPayloadStore({
+    accountUrl: blobAccountUrl,
+    container: outboundContainer,
+  });
 
   return {
     environment,
@@ -142,6 +163,8 @@ function buildAppContext(): AppContext {
     ...(errorStore ? { errorStore } : {}),
     ...(watermarkStore ? { watermarkStore } : {}),
     ...(orderSyncLog ? { orderSyncLog } : {}),
+    ...(orderAttemptStore ? { orderAttemptStore } : {}),
+    outboundPayloadStore,
   };
 }
 

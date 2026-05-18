@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   InMemoryConnectionsRepo,
   InMemoryErrorStore,
+  InMemoryOrderAttemptStore,
+  InMemoryOrderSyncLogStore,
   type Connection,
 } from '@dpi/core';
 import {
@@ -131,5 +133,50 @@ describe('handleDeadLetteredOrder', () => {
     const outcome = await handleDeadLetteredOrder(deps, envelope(), ctx());
 
     expect(outcome).toMatchObject({ kind: 'unrecorded', reason: 'no_error_store' });
+  });
+
+  it('M2-D: records a quarantined attempt row + bumps sync-log attempt_count', async () => {
+    const errorStore = new InMemoryErrorStore();
+    const orderAttemptStore = new InMemoryOrderAttemptStore();
+    const orderSyncLog = new InMemoryOrderSyncLogStore();
+    // Pre-seed a sync-log row as if the order had previously parked — the DLQ
+    // bump should update it, not insert a new one.
+    await orderSyncLog.upsert({
+      environment: 'dev',
+      connectionId: 'acme-us',
+      shopifyOrderGid: 'gid://shopify/Order/12345',
+      shopifyOrderId: '12345',
+      status: 'parked',
+      parkStage: 'external_call',
+      attemptCount: 3,
+    });
+    const deps: DlqHandlerDeps = {
+      environment: 'dev',
+      connections: new InMemoryConnectionsRepo([acme]),
+      errorStore,
+      orderAttemptStore,
+      orderSyncLog,
+    };
+
+    await handleDeadLetteredOrder(deps, envelope(), ctx({ deliveryCount: 10 }));
+
+    const rows = await orderAttemptStore.listByOrderGid({
+      environment: 'dev', connectionId: 'acme-us', shopifyOrderGid: 'gid://shopify/Order/12345',
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      deliveryCount: 10,
+      outcome: 'quarantined',
+      errorClass: 'unknown',
+      inboundEnvelopeUri: 'https://blob.example.test/x.json',
+    });
+    expect(rows[0]?.detail).toMatch(/exhausted SB redeliveries/);
+
+    const log = await orderSyncLog.findByOrderGid({
+      environment: 'dev', connectionId: 'acme-us', shopifyOrderGid: 'gid://shopify/Order/12345',
+    });
+    expect(log?.attemptCount).toBe(10);
+    expect(log?.lastDeliveryCount).toBe(10);
+    expect(log?.status).toBe('parked'); // existing status preserved
   });
 });

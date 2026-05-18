@@ -28,6 +28,14 @@ export function statusColor(status: string): string {
   return status;
 }
 
+export function red(s: string): string {
+  return `${RED}${s}${RESET}`;
+}
+
+export function yellow(s: string): string {
+  return `${YELLOW}${s}${RESET}`;
+}
+
 export function renderTable(rows: ReadonlyArray<Record<string, string>>): string {
   if (rows.length === 0) return dim('  (no rows)');
   const keys = Object.keys(rows[0]!);
