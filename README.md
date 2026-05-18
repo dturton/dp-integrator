@@ -359,6 +359,47 @@ curl -sS -X POST "https://<funcapp>.azurewebsites.net/api/ops/replay?code=$KEY" 
   -d '{"connectionId":"dev-store-1","orderGid":"6828043305123","force":false}'
 ```
 
+## Admin UI
+
+`apps/admin-ui` is a Vite + React + Tailwind + shadcn/ui SPA. First cut
+ships two views — Dashboard (status counts + recent activity) and Orders
+(paginated browser over `order_sync_log` with status filter + free-text
+search across order number / email / NS internal id).
+
+The API surface lives in the function app under `/api/admin/*`:
+
+| Route | Returns |
+|---|---|
+| `GET /api/admin/status` | counts by status, last-24h windows, 10 most recent rows, drift summary |
+| `GET /api/admin/orders` | paginated rows (`limit`/`offset`) with optional `status`, `connection`, `search` filters |
+
+### Local dev
+
+```bash
+# One-time
+pnpm install
+
+# Fetch the function key once (so the Vite proxy can attach it on /api/* requests)
+export VITE_DEV_FUNCTIONS_KEY=$(az functionapp keys list \
+  --name dpi-func-dev-auwpabjrr5flu -g rg-dpi-dev \
+  --query functionKeys.default -o tsv)
+
+# Dev server (proxies /api/admin/* to the deployed dev function app)
+pnpm --filter @dpi/admin-ui dev
+# → http://localhost:5173
+```
+
+The proxy target defaults to `dpi-func-dev-auwpabjrr5flu.azurewebsites.net`;
+override with `VITE_DEV_API_TARGET=…` if needed.
+
+### Production hosting (slice follow-up)
+
+Azure Static Web Apps will host the static bundle and proxy `/api/*` to the
+linked Function App. Easy Auth (Entra) gates the whole site; an
+`staticwebapp.config.json` in `public/` declares the SPA fallback + role
+requirements. The SWA infra Bicep + CI deploy step lands in a follow-up
+slice — for now run locally against dev.
+
 ## Working with the NetSuite SDK
 
 This monorepo depends on the first-party `netsuite-sdk` package (pinned). It is the **only** package

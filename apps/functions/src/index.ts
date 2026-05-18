@@ -12,6 +12,7 @@
 import { getAppContext } from './bootstrap.js';
 import { PostgresLookupResolver } from './adapters/index.js';
 import { getTelemetry } from './telemetry.js';
+import { registerAdminApi } from './triggers/admin-api.js';
 import { registerAdminReplay } from './triggers/admin-replay.js';
 import { registerNsDiagnostic } from './triggers/ns-diagnostic.js';
 import { registerOrderCatchupPoller } from './triggers/order-catchup-poller.js';
@@ -66,6 +67,14 @@ registerOrderImportHandler(() => {
     ...(ctx.outboundPayloadStore ? { outboundPayloadStore: ctx.outboundPayloadStore } : {}),
     telemetry: getTelemetry(),
   };
+});
+
+// Admin API backing the admin UI (apps/admin-ui). pg.Pool-only — read-mostly
+// queries over order_sync_log + reconciliation_snapshots. function-key auth.
+registerAdminApi(() => {
+  const ctx = getAppContext();
+  if (!ctx.pgPool) return undefined;
+  return { environment: ctx.environment, pgPool: ctx.pgPool };
 });
 
 // M2-A: REST admin replay surface. Reuses the AppContext's xrefStore + the
