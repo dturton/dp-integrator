@@ -146,6 +146,7 @@ export async function handleAdminConnections(deps: AdminApiDeps): Promise<HttpRe
     enabled: c.enabled,
     defaultShipItemId: c.defaultShipItemId ?? null,
     defaultDiscountItemId: c.defaultDiscountItemId ?? null,
+    defaultItemId: c.defaultItemId ?? null,
     writeTagsOnImport: c.writeTagsOnImport ?? false,
     extraOrderHeaderMappingsCount: c.extraOrderHeaderMappings?.length ?? 0,
   }));

@@ -174,6 +174,7 @@ export interface ConnectionRow {
   readonly enabled: boolean;
   readonly defaultShipItemId: string | null;
   readonly defaultDiscountItemId: string | null;
+  readonly defaultItemId: string | null;
   readonly writeTagsOnImport: boolean;
   readonly extraOrderHeaderMappingsCount: number;
 }

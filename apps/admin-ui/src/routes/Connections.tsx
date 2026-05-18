@@ -77,6 +77,7 @@ export function Connections(): React.ReactElement {
                 <TableHead className="hidden lg:table-cell w-20">Loc</TableHead>
                 <TableHead className="w-20 sm:w-24">Target</TableHead>
                 <TableHead className="hidden md:table-cell w-24">Tax</TableHead>
+                <TableHead className="hidden lg:table-cell w-32">Default item</TableHead>
                 <TableHead className="hidden lg:table-cell w-32">Discount item</TableHead>
                 <TableHead className="hidden lg:table-cell w-20">Tag-back</TableHead>
                 <TableHead className="w-14 sm:w-16">On</TableHead>
@@ -85,14 +86,14 @@ export function Connections(): React.ReactElement {
             <TableBody>
               {loading && !data && (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center text-muted-foreground">
+                  <TableCell colSpan={11} className="text-center text-muted-foreground">
                     Loading…
                   </TableCell>
                 </TableRow>
               )}
               {data?.rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center text-muted-foreground">
+                  <TableCell colSpan={11} className="text-center text-muted-foreground">
                     No connections configured.
                   </TableCell>
                 </TableRow>
@@ -124,6 +125,7 @@ function ConnectionRowView({ c }: { c: ConnectionRow }): React.ReactElement {
       <TableCell className="hidden md:table-cell">
         <Badge variant="outline">{c.taxEngine}</Badge>
       </TableCell>
+      <TableCell className="hidden lg:table-cell font-mono text-xs">{c.defaultItemId ?? '—'}</TableCell>
       <TableCell className="hidden lg:table-cell font-mono text-xs">{c.defaultDiscountItemId ?? '—'}</TableCell>
       <TableCell className="hidden lg:table-cell">
         {c.writeTagsOnImport ? (
