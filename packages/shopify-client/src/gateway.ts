@@ -33,6 +33,20 @@ export interface ShopifyGateway {
    * should propagate as ordinary `Error`s so the SB handler retries them.
    */
   getOrder(connection: Connection, orderGid: string): Promise<ShopifyOrder>;
+
+  /**
+   * Add one or more tags to a Shopify order (slice E2). Uses Shopify's
+   * `tagsAdd` mutation under the hood — set-add semantics, so re-running
+   * with the same tag is a no-op and idempotent under replay.
+   *
+   * Requires the `write_orders` scope on the custom app. `OrderNotFoundError`
+   * is thrown when Shopify returns a not-found userError; other failures
+   * propagate as plain Errors (the handler decides whether to retry).
+   *
+   * Returns the full set of tags now on the order, in case callers want to
+   * surface them.
+   */
+  tagOrder(connection: Connection, orderGid: string, tags: readonly string[]): Promise<readonly string[]>;
 }
 
 /**

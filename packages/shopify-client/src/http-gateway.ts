@@ -95,6 +95,62 @@ export class ShopifyHttpGateway implements ShopifyGateway {
     return mapGraphQLOrder(json.data.order);
   }
 
+  async tagOrder(
+    connection: Connection,
+    orderGid: string,
+    tags: readonly string[],
+  ): Promise<readonly string[]> {
+    if (tags.length === 0) return [];
+    const accessToken = await this.resolveAccessToken(connection);
+    const url = `https://${connection.shopifyStore}/admin/api/${this.apiVersion}/graphql.json`;
+    const res = await this.fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': accessToken,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ query: TAGS_ADD_MUTATION, variables: { id: orderGid, tags } }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(
+        `ShopifyHttpGateway.tagOrder: ${connection.shopifyStore} returned ${res.status}: ${text}`,
+      );
+    }
+    const json = (await res.json()) as {
+      data?: {
+        tagsAdd?: {
+          node?: { id?: string; tags?: ReadonlyArray<string> } | null;
+          userErrors?: ReadonlyArray<{ field?: ReadonlyArray<string>; message?: string; code?: string }>;
+        } | null;
+      };
+      errors?: ReadonlyArray<{ message?: string }>;
+    };
+    if (json.errors && json.errors.length > 0) {
+      throw new Error(
+        `ShopifyHttpGateway.tagOrder: GraphQL errors: ${json.errors.map((e) => e.message ?? '?').join('; ')}`,
+      );
+    }
+    const userErrors = json.data?.tagsAdd?.userErrors ?? [];
+    if (userErrors.length > 0) {
+      // Shopify uses a NOT_FOUND code on tagsAdd when the GID can't be
+      // resolved to an order — surface that as the typed error so the
+      // handler's classifier routes it as a data park rather than a
+      // generic retry.
+      const notFound = userErrors.find((e) => e.code === 'NOT_FOUND');
+      if (notFound) {
+        throw new OrderNotFoundError(orderGid, connection.shopifyStore);
+      }
+      throw new Error(
+        `ShopifyHttpGateway.tagOrder: userErrors: ${userErrors
+          .map((e) => `${(e.field ?? []).join('.')}: ${e.message ?? '?'} (${e.code ?? '?'})`)
+          .join('; ')}`,
+      );
+    }
+    return json.data?.tagsAdd?.node?.tags ?? [];
+  }
+
   private async resolveAccessToken(connection: Connection): Promise<string> {
     // shopifyAppTokenRef now holds the client_id ref (Slice C contract — see
     // ASSUMPTIONS.md on the 2026 Dev Dashboard model).
@@ -111,7 +167,17 @@ export class ShopifyHttpGateway implements ShopifyGateway {
   }
 }
 
-// --- GraphQL query + response shape ----------------------------------------
+// --- GraphQL queries + response shapes -------------------------------------
+
+const TAGS_ADD_MUTATION = `
+  mutation TagsAdd($id: ID!, $tags: [String!]!) {
+    tagsAdd(id: $id, tags: $tags) {
+      node { ... on Order { id tags } }
+      userErrors { field message code }
+    }
+  }
+`;
+
 
 const ORDER_QUERY = `
   query Order($id: ID!) {

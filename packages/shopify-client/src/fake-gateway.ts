@@ -9,9 +9,13 @@ import type { ShopifyOrder } from './order.js';
  */
 export class FakeShopifyGateway implements ShopifyGateway {
   private readonly orders = new Map<string, ShopifyOrder>();
+  /** Tags applied per-order. Mirrors Shopify's set-add semantics. */
+  private readonly tags = new Map<string, Set<string>>();
   /** Optional override — test "invalid HMAC" by returning false. */
   private verifier: (input: { rawBody: string; hmac: string; secret: string }) => boolean =
     () => true;
+  /** Optional override — test tagOrder failure paths. */
+  private tagOrderImpl: ((connection: Connection, orderGid: string, tags: readonly string[]) => Promise<readonly string[]>) | undefined;
 
   seedOrder(order: ShopifyOrder): void {
     this.orders.set(order.id, order);
@@ -33,6 +37,33 @@ export class FakeShopifyGateway implements ShopifyGateway {
       throw new OrderNotFoundError(orderGid, connection.shopifyStore);
     }
     return order;
+  }
+
+  /** Inject a custom tagOrder behavior for failure-mode tests. */
+  setTagOrderImpl(
+    fn: (connection: Connection, orderGid: string, tags: readonly string[]) => Promise<readonly string[]>,
+  ): void {
+    this.tagOrderImpl = fn;
+  }
+
+  async tagOrder(
+    connection: Connection,
+    orderGid: string,
+    tags: readonly string[],
+  ): Promise<readonly string[]> {
+    if (this.tagOrderImpl) return this.tagOrderImpl(connection, orderGid, tags);
+    if (!this.orders.has(orderGid)) {
+      throw new OrderNotFoundError(orderGid, connection.shopifyStore);
+    }
+    const existing = this.tags.get(orderGid) ?? new Set<string>();
+    for (const t of tags) existing.add(t);
+    this.tags.set(orderGid, existing);
+    return Array.from(existing).sort();
+  }
+
+  /** Test helper: read the tags currently on a seeded order. */
+  getTags(orderGid: string): readonly string[] {
+    return Array.from(this.tags.get(orderGid) ?? []).sort();
   }
 }
 

@@ -5,6 +5,7 @@ import { makeFakeOrder } from '@dpi/shopify-client';
 import {
   buildOrderPayload,
   defaultDeriveRegistry,
+  extractShopifyOrderId,
   netsuiteOrderRecordType,
   parseShopifyDate,
   shopifyLineToItemLine,
@@ -44,6 +45,34 @@ describe('derive fns', () => {
 
   it('parseShopifyDate throws on a non-date string', () => {
     expect(() => parseShopifyDate({ field: 'x' }, { x: 'not a date' })).toThrow(/not a valid ISO date/);
+  });
+
+  it('extractShopifyOrderId returns the digit tail of a Shopify GID', () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/6845372563619' });
+    expect(extractShopifyOrderId({}, order)).toBe('6845372563619');
+  });
+
+  it('extractShopifyOrderId throws if the id has no digit tail', () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/' });
+    expect(() => extractShopifyOrderId({}, order)).toThrow(/cannot extract numeric id/);
+  });
+
+  it('extractShopifyOrderId wires through extraOrderHeaderMappings to a NS custom field', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/6845372563619' });
+    const r = await buildOrderPayload({
+      connection: {
+        ...acme,
+        extraOrderHeaderMappings: [
+          { kind: 'derive', fn: 'extractShopifyOrderId', args: {}, to: 'custbody_shopify_order_id' },
+        ],
+      },
+      order,
+      customerInternalId: '4203',
+      lookups: lookupsWithDefaults(),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload['custbody_shopify_order_id']).toBe('6845372563619');
   });
 
   it('shopifyLineToItemLine emits item as plain string id (builder wraps later)', () => {

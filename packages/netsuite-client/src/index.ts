@@ -41,6 +41,7 @@ export {
 } from './default-order-map.js';
 export {
   defaultDeriveRegistry,
+  extractShopifyOrderId,
   parseShopifyDate,
   shopifyLineToItemLine,
   shopifyShippingToLine,

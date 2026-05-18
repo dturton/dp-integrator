@@ -90,6 +90,22 @@ export interface Connection {
    * not a code one.
    */
   readonly defaultDiscountItemId?: string;
+  /**
+   * When true, the order handler tags the Shopify order with `netsuite-<internalId>`
+   * after a successful NS upsert (slice E2). Opt-in per connection because:
+   *   1. it's the first NS→Shopify write the integration performs — the v1
+   *      brief explicitly leaves NS→Shopify flows out of scope, so this is
+   *      a deliberate exception you have to enable per tenant; and
+   *   2. it requires the `write_orders` Shopify scope on the custom app —
+   *      installing a wider scope on a store that doesn't need this feature
+   *      shouldn't be forced.
+   *
+   * A tag-add failure does NOT roll back the import — the NS record is the
+   * source of truth at that point. The failure logs at warn and is recorded
+   * to `error_records` with `errorClass='data'` so ops can replay just the
+   * tag operation later (a future slice; for now, manually).
+   */
+  readonly writeTagsOnImport?: boolean;
 }
 
 /** A Shopify webhook envelope as we receive it (minimal subset core needs). */

@@ -237,6 +237,48 @@ describe('handleOrderMessage — Slice D5 full pipeline', () => {
     expect(row?.status).toBe('error');
   });
 
+  it('tags the Shopify order with netsuite-<id> after import when writeTagsOnImport=true', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const conn: Connection = { ...acme, writeTagsOnImport: true };
+    const { deps, shopify } = buildDeps({ order, connections: [conn] });
+
+    const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome.kind).toBe('imported');
+    if (outcome.kind !== 'imported') return;
+    const tags = shopify.getTags('gid://shopify/Order/12345');
+    expect(tags).toEqual([`netsuite-${outcome.targetId}`]);
+  });
+
+  it('skips Shopify tag write-back when writeTagsOnImport is unset', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const { deps, shopify } = buildDeps({ order });
+    const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome.kind).toBe('imported');
+    expect(shopify.getTags('gid://shopify/Order/12345')).toEqual([]);
+  });
+
+  it('tag write-back failure does NOT roll back a successful import', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const conn: Connection = { ...acme, writeTagsOnImport: true };
+    const { deps, shopify, xrefStore } = buildDeps({ order, connections: [conn] });
+    // Inject a tagOrder that always blows up.
+    shopify.setTagOrderImpl(async () => {
+      throw new Error('shopify: HTTP 503: tag failed');
+    });
+
+    const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome.kind).toBe('imported'); // import still succeeded
+    // xref is still synced.
+    const row = await xrefStore.lookup({
+      environment: 'dev',
+      connectionId: acme.connectionId,
+      entityType: 'order',
+      sourceSystem: 'shopify',
+      sourceId: 'gid://shopify/Order/12345',
+    });
+    expect(row?.status).toBe('synced');
+  });
+
   it('rethrows on transient Shopify re-fetch failures (so SB retries)', async () => {
     const { deps, shopify } = buildDeps();
     // Swap getOrder for one that throws an arbitrary (non-OrderNotFound) error.

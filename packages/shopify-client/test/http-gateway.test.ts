@@ -217,3 +217,89 @@ describe('ShopifyHttpGateway.getOrder', () => {
     expect(gateway.verifyWebhook({ rawBody: '', hmac: '', secret: '' })).toBe(false);
   });
 });
+
+describe('ShopifyHttpGateway.tagOrder', () => {
+  it('issues a tagsAdd mutation and returns the updated tags', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(jsonResponse({
+        data: {
+          tagsAdd: {
+            node: { id: 'gid://shopify/Order/1', tags: ['netsuite-664', 'foo'] },
+            userErrors: [],
+          },
+        },
+      }));
+    const gateway = new ShopifyHttpGateway({
+      secrets: new InMemorySecretProvider({
+        'shopify-client-id-dev-store-1': 'x',
+        'shopify-webhook-secret-dev-store-1': 'y',
+      }),
+      fetchImpl: fetchMock,
+      tokenService: new ShopifyTokenService({ fetchImpl: fetchMock }),
+    });
+    const tags = await gateway.tagOrder(connection, 'gid://shopify/Order/1', ['netsuite-664']);
+    expect(tags).toEqual(['netsuite-664', 'foo']);
+    // Verify the GraphQL request used the mutation, not the order query.
+    const body = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string) as { query: string; variables: Record<string, unknown> };
+    expect(body.query).toMatch(/mutation TagsAdd/);
+    expect(body.variables).toEqual({ id: 'gid://shopify/Order/1', tags: ['netsuite-664'] });
+  });
+
+  it('throws OrderNotFoundError when tagsAdd returns NOT_FOUND userError', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(jsonResponse({
+        data: {
+          tagsAdd: {
+            node: null,
+            userErrors: [{ field: ['id'], message: 'Order not found', code: 'NOT_FOUND' }],
+          },
+        },
+      }));
+    const gateway = new ShopifyHttpGateway({
+      secrets: new InMemorySecretProvider({
+        'shopify-client-id-dev-store-1': 'x',
+        'shopify-webhook-secret-dev-store-1': 'y',
+      }),
+      fetchImpl: fetchMock,
+      tokenService: new ShopifyTokenService({ fetchImpl: fetchMock }),
+    });
+    await expect(gateway.tagOrder(connection, 'gid://shopify/Order/missing', ['x']))
+      .rejects.toThrow(OrderNotFoundError);
+  });
+
+  it('throws on non-NOT_FOUND userErrors with the message + code', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(jsonResponse({
+        data: {
+          tagsAdd: {
+            node: null,
+            userErrors: [{ field: ['tags'], message: 'invalid tag', code: 'INVALID' }],
+          },
+        },
+      }));
+    const gateway = new ShopifyHttpGateway({
+      secrets: new InMemorySecretProvider({
+        'shopify-client-id-dev-store-1': 'x',
+        'shopify-webhook-secret-dev-store-1': 'y',
+      }),
+      fetchImpl: fetchMock,
+      tokenService: new ShopifyTokenService({ fetchImpl: fetchMock }),
+    });
+    await expect(gateway.tagOrder(connection, 'gid://shopify/Order/1', ['bad/tag']))
+      .rejects.toThrow(/INVALID/);
+  });
+
+  it('returns empty array without an API call when tags is empty', async () => {
+    const fetchMock = vi.fn();
+    const gateway = new ShopifyHttpGateway({
+      secrets: new InMemorySecretProvider({}),
+      fetchImpl: fetchMock,
+    });
+    const tags = await gateway.tagOrder(connection, 'gid://shopify/Order/1', []);
+    expect(tags).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

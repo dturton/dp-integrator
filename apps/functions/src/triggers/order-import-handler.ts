@@ -225,6 +225,39 @@ export async function handleOrderMessage(
     // 11. recordSuccess → xref status = 'synced' with the NS internal id
     await deps.xrefStore.recordSuccess(dedupKey, upserted.internalId, msg.orderGid);
 
+    // 12. (slice E2) Optional NS→Shopify write-back: tag the Shopify order
+    //     with the NS internal id so storefront-side ops can see which
+    //     orders have been imported. Gated per-connection because it's a
+    //     scope-bumping write surface; brief v1 is otherwise read-only on
+    //     Shopify.
+    //
+    //     A failure here does NOT roll back the import — the xref is
+    //     already 'synced' and NS holds the source of truth. We record to
+    //     error_records as a low-severity data-class so ops can replay
+    //     just the tagging step later.
+    if (connection.writeTagsOnImport === true) {
+      const tag = `netsuite-${upserted.internalId}`;
+      try {
+        await deps.shopify.tagOrder(connection, msg.orderGid, [tag]);
+      } catch (tagErr) {
+        if (deps.errorStore) {
+          await deps.errorStore.record({
+            environment: msg.environment,
+            connectionId: connection.connectionId,
+            flow: 'order-tag-writeback',
+            dedupKey: dedupKeyString(dedupKey),
+            errorClass: classifyHandlerError(tagErr),
+            message:
+              `tagOrder('${tag}') failed for ${msg.orderGid}: ` +
+              (tagErr instanceof Error ? tagErr.message : String(tagErr)),
+            ...(tagErr instanceof Error && tagErr.stack !== undefined ? { stack: tagErr.stack } : {}),
+            envelope: { orderGid: msg.orderGid, tag, targetId: upserted.internalId },
+          });
+        }
+        // Swallow — the import succeeded, the tag is opportunistic.
+      }
+    }
+
     return {
       kind: 'imported',
       connectionId: connection.connectionId,

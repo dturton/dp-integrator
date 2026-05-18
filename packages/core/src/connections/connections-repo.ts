@@ -164,6 +164,12 @@ function coerceConnection(value: unknown, idx: number): Connection {
       ? undefined
       : String(defaultDiscountItemIdRaw);
 
+  const writeTagsOnImportRaw = v['writeTagsOnImport'];
+  const writeTagsOnImport =
+    writeTagsOnImportRaw === undefined || writeTagsOnImportRaw === null
+      ? undefined
+      : Boolean(writeTagsOnImportRaw);
+
   const conn: Connection = {
     connectionId: required('connectionId'),
     environment: env,
@@ -181,6 +187,7 @@ function coerceConnection(value: unknown, idx: number): Connection {
     ...(extraOrderHeaderMappings !== undefined ? { extraOrderHeaderMappings } : {}),
     ...(defaultShipItemId !== undefined ? { defaultShipItemId } : {}),
     ...(defaultDiscountItemId !== undefined ? { defaultDiscountItemId } : {}),
+    ...(writeTagsOnImport !== undefined ? { writeTagsOnImport } : {}),
   };
   return conn;
 }

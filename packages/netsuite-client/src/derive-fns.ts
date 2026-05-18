@@ -57,6 +57,31 @@ function buildLine(line: ShopifyLineItem, defaultItemId: string | null): Record<
 }
 
 /**
+ * Pull the numeric id off the end of `order.id` (a Shopify GID of the form
+ * `gid://shopify/Order/<digits>`). Surfaces in NS via the connection's
+ * `extraOrderHeaderMappings`, e.g.:
+ *
+ *   { kind: 'derive', fn: 'extractShopifyOrderId', args: {}, to: 'custbody_shopify_order_id' }
+ *
+ * Operators can then search NS by Shopify order id directly, without
+ * cross-referencing the `externalId` form.
+ *
+ * Throws if `order.id` doesn't end in a digit run — that would mean Shopify
+ * changed GID shape, which should fail loudly rather than silently emit a
+ * malformed value.
+ */
+export const extractShopifyOrderId: DeriveFn = (_args, source) => {
+  const order = source as ShopifyOrder;
+  const m = /\/(\d+)$/.exec(order.id);
+  if (!m) {
+    throw new Error(
+      `extractShopifyOrderId: cannot extract numeric id from order.id='${order.id}'`,
+    );
+  }
+  return m[1];
+};
+
+/**
  * Translate Shopify shipping lines into NS shipping sublist objects.
  */
 export const shopifyShippingToLine: DeriveFn = (args, source) => {
@@ -76,5 +101,6 @@ export function defaultDeriveRegistry(): MapDeriveRegistry {
     parseShopifyDate,
     shopifyLineToItemLine,
     shopifyShippingToLine,
+    extractShopifyOrderId,
   });
 }
