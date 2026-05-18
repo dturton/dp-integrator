@@ -164,13 +164,13 @@ function OrdersTable({ rows, loading }: OrdersTableProps): React.ReactElement {
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead className="w-32">Order</TableHead>
-          <TableHead>Customer</TableHead>
-          <TableHead className="w-32">Total</TableHead>
-          <TableHead className="w-28">Status</TableHead>
-          <TableHead className="w-32">Connection</TableHead>
-          <TableHead className="w-28">NS</TableHead>
-          <TableHead className="w-48">When</TableHead>
+          <TableHead className="w-24 sm:w-32">Order</TableHead>
+          <TableHead className="hidden sm:table-cell">Customer</TableHead>
+          <TableHead className="w-24 sm:w-32">Total</TableHead>
+          <TableHead className="w-24 sm:w-28">Status</TableHead>
+          <TableHead className="hidden lg:table-cell w-32">Connection</TableHead>
+          <TableHead className="hidden md:table-cell w-28">NS</TableHead>
+          <TableHead className="hidden md:table-cell w-48">When</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -198,20 +198,20 @@ function OrdersTable({ rows, loading }: OrdersTableProps): React.ReactElement {
                 {row.shopifyOrderName ?? `#${row.shopifyOrderId}`}
               </Link>
             </TableCell>
-            <TableCell className={cn('text-muted-foreground', !row.customerEmail && 'italic')}>
+            <TableCell className={cn('hidden sm:table-cell text-muted-foreground truncate max-w-[16rem]', !row.customerEmail && 'italic')}>
               {row.customerEmail ?? 'guest'}
             </TableCell>
-            <TableCell className="font-mono text-xs">
+            <TableCell className="font-mono text-xs whitespace-nowrap">
               {row.totalPrice ? `${row.currencyCode ?? ''} ${Number(row.totalPrice).toFixed(2)}` : '—'}
             </TableCell>
             <TableCell>
               <StatusBadge status={row.status} />
             </TableCell>
-            <TableCell className="text-xs">{row.connectionId}</TableCell>
-            <TableCell className="font-mono text-xs">
+            <TableCell className="hidden lg:table-cell text-xs">{row.connectionId}</TableCell>
+            <TableCell className="hidden md:table-cell font-mono text-xs">
               {row.nsInternalId ? `SO ${row.nsInternalId}` : '—'}
             </TableCell>
-            <TableCell className="text-xs text-muted-foreground">
+            <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
               {formatWhen(row.syncedAt ?? row.updatedAt)}
             </TableCell>
           </TableRow>

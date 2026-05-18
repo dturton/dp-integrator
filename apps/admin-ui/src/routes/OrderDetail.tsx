@@ -107,25 +107,25 @@ export function OrderDetail(): React.ReactElement {
   }
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6 p-4 sm:p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" asChild>
             <Link to="/orders">
               <ArrowLeft className="h-3.5 w-3.5" />
-              All orders
+              <span className="hidden sm:inline">All orders</span>
             </Link>
           </Button>
-          <div>
-            <h1 className="text-2xl font-semibold">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-semibold truncate">
               {data?.order.shopifyOrderName ?? `Order #${orderId}`}
             </h1>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground truncate">
               {connectionId} · {orderId}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -238,13 +238,13 @@ function AttemptsCard({ attempts }: { attempts: ReadonlyArray<OrderAttempt> }): 
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-16">#</TableHead>
-              <TableHead className="w-40">Outcome</TableHead>
-              <TableHead className="w-32">Stage</TableHead>
-              <TableHead>Detail</TableHead>
-              <TableHead className="w-24 text-right">Duration</TableHead>
-              <TableHead className="w-32">Payload</TableHead>
-              <TableHead className="w-44">Started</TableHead>
+              <TableHead className="w-12 sm:w-16">#</TableHead>
+              <TableHead className="w-28 sm:w-40">Outcome</TableHead>
+              <TableHead className="hidden md:table-cell w-32">Stage</TableHead>
+              <TableHead className="hidden sm:table-cell">Detail</TableHead>
+              <TableHead className="hidden lg:table-cell w-24 text-right">Duration</TableHead>
+              <TableHead className="hidden md:table-cell w-32">Payload</TableHead>
+              <TableHead className="hidden lg:table-cell w-44">Started</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -261,12 +261,12 @@ function AttemptsCard({ attempts }: { attempts: ReadonlyArray<OrderAttempt> }): 
                 <TableCell>
                   <OutcomeBadge outcome={a.outcome} />
                 </TableCell>
-                <TableCell className="text-xs text-muted-foreground">{a.stage ?? '—'}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">
+                <TableCell className="hidden md:table-cell text-xs text-muted-foreground">{a.stage ?? '—'}</TableCell>
+                <TableCell className="hidden sm:table-cell text-xs text-muted-foreground">
                   {a.detail ? <span className="line-clamp-2">{a.detail}</span> : '—'}
                 </TableCell>
-                <TableCell className="text-right font-mono text-xs">{a.durationMs}ms</TableCell>
-                <TableCell>
+                <TableCell className="hidden lg:table-cell text-right font-mono text-xs">{a.durationMs}ms</TableCell>
+                <TableCell className="hidden md:table-cell">
                   {a.outboundPayloadUri ? (
                     <a
                       href={a.outboundPayloadUri}
@@ -280,7 +280,7 @@ function AttemptsCard({ attempts }: { attempts: ReadonlyArray<OrderAttempt> }): 
                     <span className="text-xs text-muted-foreground">—</span>
                   )}
                 </TableCell>
-                <TableCell className="text-xs text-muted-foreground">{formatWhen(a.startedAt)}</TableCell>
+                <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">{formatWhen(a.startedAt)}</TableCell>
               </TableRow>
             ))}
           </TableBody>

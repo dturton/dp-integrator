@@ -163,7 +163,7 @@ export function Parked(): React.ReactElement {
       )}
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:space-y-0">
           <div>
             <CardTitle className="text-base">
               {total > 0 ? `${total.toLocaleString()} parked` : 'No parked orders'}
@@ -196,11 +196,11 @@ export function Parked(): React.ReactElement {
                     onChange={toggleAll}
                   />
                 </TableHead>
-                <TableHead className="w-32">Order</TableHead>
-                <TableHead className="w-32">Connection</TableHead>
-                <TableHead>Customer</TableHead>
-                <TableHead className="w-28">Total</TableHead>
-                <TableHead className="w-44">When</TableHead>
+                <TableHead className="w-24 sm:w-32">Order</TableHead>
+                <TableHead className="hidden lg:table-cell w-32">Connection</TableHead>
+                <TableHead className="hidden sm:table-cell">Customer</TableHead>
+                <TableHead className="hidden md:table-cell w-28">Total</TableHead>
+                <TableHead className="hidden md:table-cell w-44">When</TableHead>
                 <TableHead className="w-24 text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
@@ -242,14 +242,14 @@ export function Parked(): React.ReactElement {
                         {row.shopifyOrderName ?? `#${row.shopifyOrderId}`}
                       </Link>
                     </TableCell>
-                    <TableCell className="text-xs">{row.connectionId}</TableCell>
-                    <TableCell className={cn('text-muted-foreground text-xs', !row.customerEmail && 'italic')}>
+                    <TableCell className="hidden lg:table-cell text-xs">{row.connectionId}</TableCell>
+                    <TableCell className={cn('hidden sm:table-cell text-muted-foreground text-xs truncate max-w-[16rem]', !row.customerEmail && 'italic')}>
                       {row.customerEmail ?? 'guest'}
                     </TableCell>
-                    <TableCell className="font-mono text-xs">
+                    <TableCell className="hidden md:table-cell font-mono text-xs whitespace-nowrap">
                       {row.totalPrice ? `${row.currencyCode ?? ''} ${Number(row.totalPrice).toFixed(2)}` : '—'}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
                       {formatWhen(row.syncedAt ?? row.updatedAt)}
                     </TableCell>
                     <TableCell className="text-right">
@@ -260,7 +260,7 @@ export function Parked(): React.ReactElement {
                         disabled={busy}
                       >
                         <RefreshCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />
-                        Replay
+                        <span className="hidden sm:inline">Replay</span>
                       </Button>
                     </TableCell>
                   </TableRow>

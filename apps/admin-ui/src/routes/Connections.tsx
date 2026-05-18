@@ -45,9 +45,9 @@ export function Connections(): React.ReactElement {
   }, []);
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-4 sm:p-6">
       <header>
-        <h1 className="text-2xl font-semibold">Connections</h1>
+        <h1 className="text-xl sm:text-2xl font-semibold">Connections</h1>
         <p className="text-sm text-muted-foreground">
           Live read of the function app's <code>DPI_CONNECTIONS_JSON</code> setting. Read-only for
           now — edits go through the Azure portal or <code>az functionapp config appsettings set</code>.
@@ -70,16 +70,16 @@ export function Connections(): React.ReactElement {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-32">Connection</TableHead>
-                <TableHead>Shopify store</TableHead>
-                <TableHead className="w-32">NS account</TableHead>
-                <TableHead className="w-20">Sub</TableHead>
-                <TableHead className="w-20">Loc</TableHead>
-                <TableHead className="w-24">Target</TableHead>
-                <TableHead className="w-24">Tax</TableHead>
-                <TableHead className="w-32">Discount item</TableHead>
-                <TableHead className="w-20">Tag-back</TableHead>
-                <TableHead className="w-16">On</TableHead>
+                <TableHead className="w-24 sm:w-32">Connection</TableHead>
+                <TableHead className="hidden sm:table-cell">Shopify store</TableHead>
+                <TableHead className="hidden md:table-cell w-32">NS account</TableHead>
+                <TableHead className="hidden lg:table-cell w-20">Sub</TableHead>
+                <TableHead className="hidden lg:table-cell w-20">Loc</TableHead>
+                <TableHead className="w-20 sm:w-24">Target</TableHead>
+                <TableHead className="hidden md:table-cell w-24">Tax</TableHead>
+                <TableHead className="hidden lg:table-cell w-32">Discount item</TableHead>
+                <TableHead className="hidden lg:table-cell w-20">Tag-back</TableHead>
+                <TableHead className="w-14 sm:w-16">On</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -111,21 +111,21 @@ export function Connections(): React.ReactElement {
 function ConnectionRowView({ c }: { c: ConnectionRow }): React.ReactElement {
   return (
     <TableRow>
-      <TableCell className="font-mono text-xs font-medium">{c.connectionId}</TableCell>
-      <TableCell className="text-xs">{c.shopifyStore}</TableCell>
-      <TableCell className="font-mono text-xs">{c.nsAccountId}</TableCell>
-      <TableCell className="font-mono text-xs">{c.nsSubsidiary}</TableCell>
-      <TableCell className="font-mono text-xs">{c.nsLocation ?? '—'}</TableCell>
+      <TableCell className="font-mono text-xs font-medium truncate max-w-[8rem]">{c.connectionId}</TableCell>
+      <TableCell className="hidden sm:table-cell text-xs truncate max-w-[14rem]">{c.shopifyStore}</TableCell>
+      <TableCell className="hidden md:table-cell font-mono text-xs">{c.nsAccountId}</TableCell>
+      <TableCell className="hidden lg:table-cell font-mono text-xs">{c.nsSubsidiary}</TableCell>
+      <TableCell className="hidden lg:table-cell font-mono text-xs">{c.nsLocation ?? '—'}</TableCell>
       <TableCell>
         <Badge variant={c.orderTarget === 'sales_order' ? 'default' : 'secondary'}>
           {c.orderTarget === 'sales_order' ? 'SO' : 'CS'}
         </Badge>
       </TableCell>
-      <TableCell>
+      <TableCell className="hidden md:table-cell">
         <Badge variant="outline">{c.taxEngine}</Badge>
       </TableCell>
-      <TableCell className="font-mono text-xs">{c.defaultDiscountItemId ?? '—'}</TableCell>
-      <TableCell>
+      <TableCell className="hidden lg:table-cell font-mono text-xs">{c.defaultDiscountItemId ?? '—'}</TableCell>
+      <TableCell className="hidden lg:table-cell">
         {c.writeTagsOnImport ? (
           <CheckCircle2 className="h-4 w-4 text-emerald-600" />
         ) : (

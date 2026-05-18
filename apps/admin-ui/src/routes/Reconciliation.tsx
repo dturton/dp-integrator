@@ -103,7 +103,7 @@ export function Reconciliation(): React.ReactElement {
 
       <Card>
         <CardHeader className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle className="text-base">Snapshots</CardTitle>
               <CardDescription>Last 30 business days, newest first.</CardDescription>
@@ -127,12 +127,12 @@ export function Reconciliation(): React.ReactElement {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-32">Date</TableHead>
-                <TableHead className="w-32">Connection</TableHead>
-                <TableHead className="w-40">Shopify</TableHead>
-                <TableHead className="w-40">dpi ledger</TableHead>
-                <TableHead className="w-32">Status</TableHead>
-                <TableHead>Drift detail</TableHead>
+                <TableHead className="w-24 sm:w-32">Date</TableHead>
+                <TableHead className="hidden lg:table-cell w-32">Connection</TableHead>
+                <TableHead className="w-32 sm:w-40">Shopify</TableHead>
+                <TableHead className="hidden sm:table-cell w-40">dpi ledger</TableHead>
+                <TableHead className="w-24 sm:w-32">Status</TableHead>
+                <TableHead className="hidden md:table-cell">Drift detail</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -165,12 +165,12 @@ function Row({ row }: { row: ReconciliationRow }): React.ReactElement {
   const drift = row.discrepancy !== null;
   return (
     <TableRow>
-      <TableCell className="font-mono text-xs">{row.businessDate}</TableCell>
-      <TableCell className="text-xs">{row.connectionId}</TableCell>
-      <TableCell className="font-mono text-xs">
+      <TableCell className="font-mono text-xs whitespace-nowrap">{row.businessDate}</TableCell>
+      <TableCell className="hidden lg:table-cell text-xs">{row.connectionId}</TableCell>
+      <TableCell className="font-mono text-xs whitespace-nowrap">
         {row.shopifyOrderCount} / {Number(row.shopifyTotal).toFixed(2)}
       </TableCell>
-      <TableCell className="font-mono text-xs">
+      <TableCell className="hidden sm:table-cell font-mono text-xs whitespace-nowrap">
         {row.nsTxnCount} / {Number(row.nsTotal).toFixed(2)}
       </TableCell>
       <TableCell>
@@ -186,7 +186,7 @@ function Row({ row }: { row: ReconciliationRow }): React.ReactElement {
           </Badge>
         )}
       </TableCell>
-      <TableCell className="text-xs text-muted-foreground">
+      <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
         {drift && row.discrepancy ? <DriftDetail discrepancy={row.discrepancy} /> : '—'}
       </TableCell>
     </TableRow>
