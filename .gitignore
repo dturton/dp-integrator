@@ -13,4 +13,6 @@ coverage/
 .vitest-temp/
 *.log
 .bicep-build/
+infra/*.json
+infra/modules/*.json
 .claude/
