@@ -76,9 +76,30 @@ jobs:
         env:
           POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
           KV_ADMIN_PRINCIPAL_ID: ${{ secrets.KEY_VAULT_ADMIN_PRINCIPAL_ID }}
-          DPI_CONNECTIONS_JSON: ${{ secrets.DPI_CONNECTIONS_JSON }}
+          BOOTSTRAP_CONNECTIONS_JSON: ${{ secrets.DPI_CONNECTIONS_JSON }}
         run: |
           set -euo pipefail
+          # Preserve live operator edits to DPI_CONNECTIONS_JSON across infra
+          # deploys: prefer the value already on the Function App, fall back
+          # to the GitHub secret only when the live setting is empty (fresh
+          # environment bootstrap). Without this, every infra-run would
+          # overwrite operator changes (defaultDiscountItemId,
+          # writeTagsOnImport, etc.) back to whatever the secret last had.
+          RG="rg-dpi-${{ github.event.inputs.environment }}"
+          EXISTING_FUNC_APP=$(az functionapp list --resource-group "$RG" --query '[0].name' -o tsv 2>/dev/null || true)
+          LIVE_CONNECTIONS_JSON=""
+          if [ -n "${EXISTING_FUNC_APP:-}" ]; then
+            LIVE_CONNECTIONS_JSON=$(az functionapp config appsettings list \
+              --name "$EXISTING_FUNC_APP" --resource-group "$RG" \
+              --query "[?name=='DPI_CONNECTIONS_JSON'].value | [0]" -o tsv 2>/dev/null || true)
+          fi
+          if [ -n "${LIVE_CONNECTIONS_JSON:-}" ] && [ "$LIVE_CONNECTIONS_JSON" != "[]" ]; then
+            CONNECTIONS_JSON="$LIVE_CONNECTIONS_JSON"
+            echo "::notice::DPI_CONNECTIONS_JSON: using live value ($(echo "$CONNECTIONS_JSON" | jq 'length') connection[s])"
+          else
+            CONNECTIONS_JSON="$BOOTSTRAP_CONNECTIONS_JSON"
+            echo "::notice::DPI_CONNECTIONS_JSON: bootstrapping from GH secret (no live value found)"
+          fi
           DEPLOYMENT_NAME="dpi-${{ github.event.inputs.environment }}-$(date -u +%Y%m%d%H%M%S)"
           OUTPUTS=$(az deployment sub create \
             --name "$DEPLOYMENT_NAME" \
@@ -87,7 +108,7 @@ jobs:
             --parameters "infra/parameters/${{ github.event.inputs.environment }}.bicepparam" \
             --parameters postgresAdminPassword="$POSTGRES_ADMIN_PASSWORD" \
             --parameters keyVaultAdminPrincipalId="$KV_ADMIN_PRINCIPAL_ID" \
-            --parameters connectionsJson="$DPI_CONNECTIONS_JSON" \
+            --parameters connectionsJson="$CONNECTIONS_JSON" \
             --query properties.outputs \
             -o json)
           FUNCTION_APP=$(echo "$OUTPUTS" | jq -r '.functionAppName.value')
