@@ -1,6 +1,6 @@
 import type { Connection } from '@dpi/core';
-import type { NetSuiteGateway } from '@dpi/netsuite-client';
-import type { ShopifyCustomer } from '@dpi/shopify-client';
+import { shopifyAddressToNs, type NetSuiteGateway } from '@dpi/netsuite-client';
+import type { ShopifyAddress, ShopifyCustomer } from '@dpi/shopify-client';
 
 /**
  * Customer match-or-create activity (M1 brief §1: "customer match/create").
@@ -36,16 +36,29 @@ export interface CustomerResolution {
   readonly created: boolean;
 }
 
+/**
+ * Optional order-level addresses to write back to the customer record's
+ * addressbook (slice D9). The connection chose "overwrite addressbook on
+ * every import" — so the resolver always emits the order's addresses,
+ * NS replaces the prior list. If both are present and identical, dedupes
+ * to a single entry with both default flags set.
+ */
+export interface OrderAddressesForCustomer {
+  readonly billing?: ShopifyAddress;
+  readonly shipping?: ShopifyAddress;
+}
+
 export async function resolveCustomer(
   deps: CustomerResolverDeps,
   connection: Connection,
   shopifyCustomer: ShopifyCustomer | null,
   options: CustomerResolverOptions,
+  orderAddresses: OrderAddressesForCustomer = {},
 ): Promise<CustomerResolution> {
   if (!shopifyCustomer) {
     return { internalId: options.guestCustomerInternalId, isGuest: true, created: false };
   }
-  const payload = buildCustomerPayload(connection, shopifyCustomer);
+  const payload = buildCustomerPayload(connection, shopifyCustomer, orderAddresses);
   const result = await deps.ns.upsertByExternalId({
     nsAccountId: connection.nsAccountId,
     // 'customer' is the NetSuite record-type string; netsuite-sdk's RecordType
@@ -59,14 +72,14 @@ export async function resolveCustomer(
 }
 
 /**
- * Build the minimal NetSuite customer payload. Field names match NS Customer
- * record schema (lowercase, single-word per NS convention). Address fields
- * land in Slice D — they need separate address-list handling on the NS side
- * and the address-mapping primitives are part of the mapping engine.
+ * Build the NetSuite customer payload. Identity fields + subsidiary + an
+ * optional `addressbook` sublist populated from the order's shipping/billing
+ * addresses (overwrite-on-every-import semantics per connection choice).
  */
 function buildCustomerPayload(
   connection: Connection,
   c: ShopifyCustomer,
+  orderAddresses: OrderAddressesForCustomer,
 ): Record<string, unknown> {
   // Person if we have first/last name; fall back to company-only when only an
   // email or company is available. NS rejects records with neither.
@@ -91,5 +104,55 @@ function buildCustomerPayload(
   // record itself; fall through to it when present.
   const phone = c.defaultAddress?.phone;
   if (phone) payload['phone'] = phone;
+
+  const addressbook = buildAddressbook(orderAddresses);
+  if (addressbook.length > 0) {
+    payload['addressbook'] = { items: addressbook };
+  }
   return payload;
+}
+
+/**
+ * Build the NS customer `addressbook` sublist from this order's billing +
+ * shipping addresses.
+ *
+ *   - If both are present and identical (typical online order to a residence),
+ *     emit ONE entry with both defaultBilling and defaultShipping = true.
+ *   - If both are present and different (gift / drop-ship), emit TWO entries.
+ *   - If only one is present, emit it with both default flags = true.
+ *   - If neither has any content, emit nothing.
+ */
+function buildAddressbook(addresses: OrderAddressesForCustomer): Array<Record<string, unknown>> {
+  const billing = shopifyAddressToNs(addresses.billing);
+  const shipping = shopifyAddressToNs(addresses.shipping);
+  if (!billing && !shipping) return [];
+
+  // Same address used for both — collapse into one entry.
+  if (billing && shipping && JSON.stringify(billing) === JSON.stringify(shipping)) {
+    return [{
+      defaultBilling: true,
+      defaultShipping: true,
+      label: 'Default',
+      addressbookaddress: billing,
+    }];
+  }
+
+  const out: Array<Record<string, unknown>> = [];
+  if (billing) {
+    out.push({
+      defaultBilling: true,
+      defaultShipping: !shipping, // become the shipping default if no separate shipping entry
+      label: 'Billing',
+      addressbookaddress: billing,
+    });
+  }
+  if (shipping) {
+    out.push({
+      defaultBilling: !billing,
+      defaultShipping: true,
+      label: 'Shipping',
+      addressbookaddress: shipping,
+    });
+  }
+  return out;
 }

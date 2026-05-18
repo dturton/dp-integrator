@@ -173,12 +173,19 @@ export async function handleOrderMessage(
       };
     }
 
-    // 5. Customer match/create
+    // 5. Customer match/create. Pass the order's billing/shipping addresses
+    //    through so the resolver writes them back to the NS customer record's
+    //    addressbook (slice D9 — overwrite semantics per the connection
+    //    choice; same address on both sides collapses to one entry).
     const customer = await resolveCustomer(
       { ns: deps.ns },
       connection,
       order.customer,
       { guestCustomerInternalId: deps.guestCustomerInternalId },
+      {
+        ...(order.billingAddress ? { billing: order.billingAddress } : {}),
+        ...(order.shippingAddress ? { shipping: order.shippingAddress } : {}),
+      },
     );
 
     // 6. Build NS payload (mapping engine + derives)

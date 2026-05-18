@@ -44,6 +44,11 @@ export function buildDefaultOrderHeaderMap(connection: Connection): readonly Map
       to: 'paymentMethod',
       required: false,
     },
+    // Address sub-records (slice D9). The derives return either a NS-shaped
+    // sub-record object or null; the payload builder passes objects through
+    // unchanged (no ref-wrap) and skips fields whose value is null.
+    { kind: 'derive', fn: 'shopifyShippingAddressToNs', args: {}, to: 'shippingAddress' },
+    { kind: 'derive', fn: 'shopifyBillingAddressToNs',  args: {}, to: 'billingAddress'  },
   ];
   if (connection.nsLocation !== undefined && connection.nsLocation.length > 0) {
     headers.push({ kind: 'constant', value: connection.nsLocation, to: 'location' });

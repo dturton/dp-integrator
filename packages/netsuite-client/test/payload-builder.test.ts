@@ -235,7 +235,7 @@ describe('buildOrderPayload', () => {
     const order = makeFakeOrder();
     const customDerives = new MapDeriveRegistry({
       ...Object.fromEntries(
-        ['parseShopifyDate', 'shopifyLineToItemLine', 'shopifyShippingToLine'].map((n) => {
+        ['parseShopifyDate', 'shopifyLineToItemLine', 'shopifyShippingToLine', 'shopifyShippingAddressToNs', 'shopifyBillingAddressToNs'].map((n) => {
           const reg = defaultDeriveRegistry();
           return [n, reg.get(n)!];
         }),
@@ -319,6 +319,75 @@ describe('buildOrderPayload — order-level discount (D7)', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.payload['discountRate']).toBe(-12.35);
+  });
+});
+
+describe('buildOrderPayload — addresses (D9)', () => {
+  it('emits shippingAddress and billingAddress sub-records from order.shippingAddress / billingAddress', async () => {
+    const order = makeFakeOrder({
+      billingAddress: {
+        firstName: 'Jane', lastName: 'Doe',
+        address1: '123 Main St', address2: 'Apt 4',
+        city: 'Springfield', provinceCode: 'IL', zip: '62701',
+        countryCode: 'US', phone: '5551234567',
+      },
+      shippingAddress: {
+        firstName: 'John', lastName: 'Doe', company: 'Acme Co',
+        address1: '456 Oak Ave', city: 'Chicago', provinceCode: 'IL',
+        zip: '60601', countryCode: 'US',
+      },
+    });
+    const r = await buildOrderPayload({
+      connection: acme, order, customerInternalId: '4203',
+      lookups: lookupsWithDefaults(),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload['shippingAddress']).toEqual({
+      addressee: 'John Doe',
+      attention: 'Acme Co',
+      addr1: '456 Oak Ave',
+      city: 'Chicago',
+      state: 'IL',
+      zip: '60601',
+      country: 'US',
+    });
+    expect(r.payload['billingAddress']).toEqual({
+      addressee: 'Jane Doe',
+      addr1: '123 Main St',
+      addr2: 'Apt 4',
+      city: 'Springfield',
+      state: 'IL',
+      zip: '62701',
+      country: 'US',
+      addrPhone: '5551234567',
+    });
+  });
+
+  it('omits address fields when the order has no billing / shipping addresses', async () => {
+    const order = makeFakeOrder();
+    // makeFakeOrder doesn't seed addresses by default — derives return null.
+    const r = await buildOrderPayload({
+      connection: acme, order, customerInternalId: '4203',
+      lookups: lookupsWithDefaults(),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload['shippingAddress']).toBeUndefined();
+    expect(r.payload['billingAddress']).toBeUndefined();
+  });
+
+  it('omits an address field when its source has only empty placeholder fields', async () => {
+    const order = makeFakeOrder({
+      shippingAddress: { firstName: 'John' }, // no addr1/city/zip → no content
+    });
+    const r = await buildOrderPayload({
+      connection: acme, order, customerInternalId: '4203',
+      lookups: lookupsWithDefaults(),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload['shippingAddress']).toBeUndefined();
   });
 });
 

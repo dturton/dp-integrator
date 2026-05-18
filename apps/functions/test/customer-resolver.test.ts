@@ -97,6 +97,75 @@ describe('resolveCustomer', () => {
     expect(rec2?.payload).toMatchObject({ companyname: '5555' });
   });
 
+  it('emits an addressbook entry per address; merges to one when billing equals shipping', async () => {
+    const ns = new FakeNetSuiteGateway();
+    const customer: ShopifyCustomer = {
+      id: 'gid://shopify/Customer/42',
+      firstName: 'Jane',
+      lastName: 'Doe',
+    };
+    const sameAddress = {
+      firstName: 'Jane', lastName: 'Doe', address1: '123 Main St',
+      city: 'Springfield', provinceCode: 'IL', zip: '62701', countryCode: 'US',
+    };
+    await resolveCustomer(
+      { ns },
+      connection,
+      customer,
+      { guestCustomerInternalId: '99' },
+      { billing: sameAddress, shipping: sameAddress },
+    );
+    const rec = ns.getRecords(connection.nsAccountId, 'customer' as never).get(customer.id);
+    const addressbook = (rec?.payload['addressbook'] as { items: Array<Record<string, unknown>> }).items;
+    expect(addressbook).toHaveLength(1);
+    expect(addressbook[0]).toMatchObject({
+      defaultBilling: true,
+      defaultShipping: true,
+      label: 'Default',
+    });
+    expect((addressbook[0] as { addressbookaddress: Record<string, unknown> }).addressbookaddress).toMatchObject({
+      addr1: '123 Main St',
+      city: 'Springfield',
+      state: 'IL',
+      country: 'US',
+    });
+  });
+
+  it('emits two addressbook entries when billing and shipping differ (gift / drop-ship case)', async () => {
+    const ns = new FakeNetSuiteGateway();
+    const customer: ShopifyCustomer = {
+      id: 'gid://shopify/Customer/43',
+      firstName: 'Buyer',
+      lastName: 'Person',
+    };
+    await resolveCustomer(
+      { ns },
+      connection,
+      customer,
+      { guestCustomerInternalId: '99' },
+      {
+        billing: { firstName: 'Buyer', lastName: 'Person', address1: '1 Pay St', city: 'A', provinceCode: 'CA', zip: '12345', countryCode: 'US' },
+        shipping: { firstName: 'Recipient', lastName: 'Person', address1: '2 Ship St', city: 'B', provinceCode: 'NY', zip: '67890', countryCode: 'US' },
+      },
+    );
+    const rec = ns.getRecords(connection.nsAccountId, 'customer' as never).get(customer.id);
+    const addressbook = (rec?.payload['addressbook'] as { items: Array<Record<string, unknown>> }).items;
+    expect(addressbook).toHaveLength(2);
+    expect(addressbook[0]).toMatchObject({ defaultBilling: true, defaultShipping: false, label: 'Billing' });
+    expect(addressbook[1]).toMatchObject({ defaultBilling: false, defaultShipping: true, label: 'Shipping' });
+  });
+
+  it('omits addressbook entirely when no order addresses provided', async () => {
+    const ns = new FakeNetSuiteGateway();
+    const customer: ShopifyCustomer = {
+      id: 'gid://shopify/Customer/44',
+      firstName: 'NoAddrs',
+    };
+    await resolveCustomer({ ns }, connection, customer, { guestCustomerInternalId: '99' });
+    const rec = ns.getRecords(connection.nsAccountId, 'customer' as never).get(customer.id);
+    expect(rec?.payload['addressbook']).toBeUndefined();
+  });
+
   it('partitions records by NS account (multi-tenant isolation)', async () => {
     const ns = new FakeNetSuiteGateway();
     const a: Connection = { ...connection, nsAccountId: 'acct-A' };

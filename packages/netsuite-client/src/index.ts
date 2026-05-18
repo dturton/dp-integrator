@@ -43,6 +43,9 @@ export {
   defaultDeriveRegistry,
   extractShopifyOrderId,
   parseShopifyDate,
+  shopifyAddressToNs,
+  shopifyBillingAddressToNs,
   shopifyLineToItemLine,
+  shopifyShippingAddressToNs,
   shopifyShippingToLine,
 } from './derive-fns.js';

@@ -178,6 +178,13 @@ const LINE_REF_FIELDS: readonly string[] = [
 export function wrapNsReferences(raw: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
+    // Skip undefined fields entirely. `null` is a deliberate "clear this
+    // field" signal in some NS contexts so it passes through unchanged
+    // for ref fields — but for derived sub-records (addresses, etc.) a
+    // null return from the derive means "no content," and we should NOT
+    // emit `key: null` on the payload (NS treats that as INVALID_FIELD
+    // on some sub-records). Drop nulls from non-ref keys.
+    if (value === undefined) continue;
     if (key === 'item' || key === 'shipping') {
       // Sublist: wrap with { items: [...] } and ref-wrap each line's fields.
       if (Array.isArray(value)) {
@@ -186,8 +193,11 @@ export function wrapNsReferences(raw: Record<string, unknown>): Record<string, u
         out[key] = value;
       }
     } else if (HEADER_REF_FIELDS.includes(key)) {
+      // For ref fields, keep null pass-through (some callers use it to
+      // explicitly null a reference, e.g. paymentMethod=null when no match).
       out[key] = wrapRef(value);
     } else {
+      if (value === null) continue;
       out[key] = value;
     }
   }

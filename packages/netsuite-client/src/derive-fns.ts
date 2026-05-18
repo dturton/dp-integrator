@@ -1,6 +1,6 @@
 import type { DeriveFn } from '@dpi/mapping-engine';
 import { MapDeriveRegistry } from '@dpi/mapping-engine';
-import type { ShopifyLineItem, ShopifyOrder } from '@dpi/shopify-client';
+import type { ShopifyAddress, ShopifyLineItem, ShopifyOrder } from '@dpi/shopify-client';
 
 /**
  * Built-in derive functions referenced by the default order field-map
@@ -95,6 +95,56 @@ export const shopifyShippingToLine: DeriveFn = (args, source) => {
   }));
 };
 
+/**
+ * Translate a Shopify address into NS's address sub-record shape.
+ *
+ * Mapping:
+ *   Shopify              NS
+ *   ────────             ──────
+ *   firstName + lastName → addressee (composed)
+ *   company             → attention
+ *   address1            → addr1
+ *   address2            → addr2
+ *   city                → city
+ *   provinceCode        → state           (2-letter for US/CA)
+ *   zip                 → zip
+ *   countryCode         → country         (2-letter ISO, emitted as plain string)
+ *   phone               → addrPhone
+ *
+ * Returns `null` for an address that has no meaningful content (no
+ * address1, no city, no zip) so the caller can skip emitting the field
+ * rather than land an empty sub-record on the NS payload.
+ */
+export function shopifyAddressToNs(addr: ShopifyAddress | undefined | null): Record<string, unknown> | null {
+  if (!addr) return null;
+  const hasContent = Boolean(addr.address1 || addr.city || addr.zip);
+  if (!hasContent) return null;
+  const addressee = [addr.firstName, addr.lastName].filter(Boolean).join(' ').trim();
+  const out: Record<string, unknown> = {};
+  if (addressee) out['addressee'] = addressee;
+  if (addr.company) out['attention'] = addr.company;
+  if (addr.address1) out['addr1'] = addr.address1;
+  if (addr.address2) out['addr2'] = addr.address2;
+  if (addr.city) out['city'] = addr.city;
+  if (addr.provinceCode) out['state'] = addr.provinceCode;
+  if (addr.zip) out['zip'] = addr.zip;
+  if (addr.countryCode) out['country'] = addr.countryCode;
+  if (addr.phone) out['addrPhone'] = addr.phone;
+  return out;
+}
+
+/** Shipping address derive — reads `order.shippingAddress` → NS sub-record. */
+export const shopifyShippingAddressToNs: DeriveFn = (_args, source) => {
+  const order = source as ShopifyOrder;
+  return shopifyAddressToNs(order.shippingAddress);
+};
+
+/** Billing address derive — reads `order.billingAddress` → NS sub-record. */
+export const shopifyBillingAddressToNs: DeriveFn = (_args, source) => {
+  const order = source as ShopifyOrder;
+  return shopifyAddressToNs(order.billingAddress);
+};
+
 /** Standard derive registry. */
 export function defaultDeriveRegistry(): MapDeriveRegistry {
   return new MapDeriveRegistry({
@@ -102,5 +152,7 @@ export function defaultDeriveRegistry(): MapDeriveRegistry {
     shopifyLineToItemLine,
     shopifyShippingToLine,
     extractShopifyOrderId,
+    shopifyShippingAddressToNs,
+    shopifyBillingAddressToNs,
   });
 }
