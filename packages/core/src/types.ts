@@ -73,6 +73,23 @@ export interface Connection {
    * Shopify shipping title to its own NS internal id (multi-rate stores).
    */
   readonly defaultShipItemId?: string;
+  /**
+   * NS internal id of the Discount item (`itemtype=Discount`) used to land
+   * Shopify order-level discounts on NS sales orders. When `order.totalDiscounts`
+   * is non-zero, the payload builder emits `discountItem: <this>` plus
+   * `discountRate: -<amount>` on the header — NS then applies it before tax so
+   * its recomputed tax base matches Shopify's.
+   *
+   * Brief invariant 2 ("park, don't guess"): if a Shopify order carries a
+   * discount on a connection where this is **not** set, the payload builder
+   * parks the order as `unmapped_construct` rather than letting it land in NS
+   * without the discount (which over-charges via NS's now-larger tax base).
+   *
+   * The Discount item in NS must have "Apply Before Tax" enabled for this
+   * approach to reproduce Shopify's tax base — that's a NS-side setup step,
+   * not a code one.
+   */
+  readonly defaultDiscountItemId?: string;
 }
 
 /** A Shopify webhook envelope as we receive it (minimal subset core needs). */

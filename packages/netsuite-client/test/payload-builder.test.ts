@@ -223,6 +223,76 @@ describe('buildOrderPayload', () => {
   });
 });
 
+describe('buildOrderPayload — order-level discount (D7)', () => {
+  it('emits discountItem + discountRate when order has totalDiscounts and connection has defaultDiscountItemId', async () => {
+    const order = makeFakeOrder({
+      totalDiscounts: { amount: '47.45', currencyCode: 'USD' },
+    });
+    const r = await buildOrderPayload({
+      connection: { ...acme, defaultDiscountItemId: '8123' },
+      order,
+      customerInternalId: '4203',
+      lookups: lookupsWithDefaults(),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // NS reference auto-wrap: discountItem is in HEADER_REF_FIELDS so the bare
+    // string '8123' becomes { id: '8123' }. discountRate stays as the raw
+    // negative currency string '-47.45'.
+    expect(r.payload['discountItem']).toEqual({ id: '8123' });
+    expect(r.payload['discountRate']).toBe('-47.45');
+  });
+
+  it('skips discount fields when order has no discount (totalDiscounts=0)', async () => {
+    const order = makeFakeOrder({
+      totalDiscounts: { amount: '0.00', currencyCode: 'USD' },
+    });
+    const r = await buildOrderPayload({
+      // defaultDiscountItemId set, but no discount → no discount fields emitted
+      connection: { ...acme, defaultDiscountItemId: '8123' },
+      order,
+      customerInternalId: '4203',
+      lookups: lookupsWithDefaults(),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload['discountItem']).toBeUndefined();
+    expect(r.payload['discountRate']).toBeUndefined();
+  });
+
+  it("parks (unmapped_construct) when order has a discount but connection has no defaultDiscountItemId — brief invariant: don't over-charge in NS", async () => {
+    const order = makeFakeOrder({
+      totalDiscounts: { amount: '47.45', currencyCode: 'USD' },
+    });
+    const r = await buildOrderPayload({
+      connection: acme, // no defaultDiscountItemId
+      order,
+      customerInternalId: '4203',
+      lookups: lookupsWithDefaults(),
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.parked.reason).toBe('unmapped_construct');
+    expect(r.parked.detail).toMatch(/totalDiscounts=47\.45/);
+    expect(r.parked.detail).toMatch(/defaultDiscountItemId/);
+  });
+
+  it('formats discountRate with 2 decimals from arbitrary decimal precision', async () => {
+    const order = makeFakeOrder({
+      totalDiscounts: { amount: '12.3456', currencyCode: 'USD' },
+    });
+    const r = await buildOrderPayload({
+      connection: { ...acme, defaultDiscountItemId: '8123' },
+      order,
+      customerInternalId: '4203',
+      lookups: lookupsWithDefaults(),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload['discountRate']).toBe('-12.35');
+  });
+});
+
 describe('netsuiteOrderRecordType', () => {
   it('maps sales_order → salesorder', () => {
     expect(netsuiteOrderRecordType({ ...acme, orderTarget: 'sales_order' })).toBe('salesorder');

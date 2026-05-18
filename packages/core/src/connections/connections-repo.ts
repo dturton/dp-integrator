@@ -158,6 +158,12 @@ function coerceConnection(value: unknown, idx: number): Connection {
       ? undefined
       : String(defaultShipItemIdRaw);
 
+  const defaultDiscountItemIdRaw = v['defaultDiscountItemId'];
+  const defaultDiscountItemId =
+    defaultDiscountItemIdRaw === undefined || defaultDiscountItemIdRaw === null
+      ? undefined
+      : String(defaultDiscountItemIdRaw);
+
   const conn: Connection = {
     connectionId: required('connectionId'),
     environment: env,
@@ -174,6 +180,7 @@ function coerceConnection(value: unknown, idx: number): Connection {
     enabled,
     ...(extraOrderHeaderMappings !== undefined ? { extraOrderHeaderMappings } : {}),
     ...(defaultShipItemId !== undefined ? { defaultShipItemId } : {}),
+    ...(defaultDiscountItemId !== undefined ? { defaultDiscountItemId } : {}),
   };
   return conn;
 }

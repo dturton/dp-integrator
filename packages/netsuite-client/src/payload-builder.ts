@@ -6,6 +6,7 @@ import {
   type MapDeriveRegistry,
   type Mapping,
   type MappingResult,
+  type ParkReason,
   park,
 } from '@dpi/mapping-engine';
 import type { ShopifyOrder } from '@dpi/shopify-client';
@@ -86,6 +87,14 @@ export async function buildOrderPayload(
     }
   }
 
+  // Order-level discount (slice D7). Shopify carries it at order header;
+  // NS consumes it via `discountItem` + `discountRate`. If the connection
+  // hasn't been configured with a discount item but the order *does* carry a
+  // discount, we park rather than book the order at the un-discounted total —
+  // NS would over-tax against the larger base (brief invariant 2).
+  const discountFields = mapOrderDiscount(args.connection, args.order);
+  if (!discountFields.ok) return { ok: false, parked: discountFields.parked };
+
   // Build the raw payload, then run the NS-ref auto-wrap pass over it.
   const raw: Record<string, unknown> = {
     ...header,
@@ -94,8 +103,44 @@ export async function buildOrderPayload(
     ...(Array.isArray(shippingLines) && shippingLines.length > 0
       ? { shipping: shippingLines }
       : {}),
+    ...discountFields.fields,
   };
   return { ok: true, payload: wrapNsReferences(raw) as NsOrderPayload };
+}
+
+interface DiscountFields { readonly ok: true; readonly fields: Record<string, unknown>; }
+interface DiscountPark { readonly ok: false; readonly parked: ParkReason; }
+type DiscountResult = DiscountFields | DiscountPark;
+
+function mapOrderDiscount(connection: Connection, order: ShopifyOrder): DiscountResult {
+  const amount = Number.parseFloat(order.totalDiscounts.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { ok: true, fields: {} };
+  }
+  if (!connection.defaultDiscountItemId || connection.defaultDiscountItemId.length === 0) {
+    return {
+      ok: false,
+      parked: {
+        reason: 'unmapped_construct',
+        detail:
+          `order carries totalDiscounts=${amount.toFixed(2)} ${order.totalDiscounts.currencyCode} ` +
+          `but connection '${connection.connectionId}' has no defaultDiscountItemId — set the NS ` +
+          'Discount item internal id on the connection (must be "Apply Before Tax") and replay',
+        construct: 'order_discount',
+      },
+    };
+  }
+  // NS REST treats `discountRate` as a string. A negative bare number is a
+  // currency amount (the Shopify-style flat discount); a value ending in
+  // `%` would be a percentage. We always emit the bare currency form
+  // because Shopify gives us the absolute amount, not a rate.
+  return {
+    ok: true,
+    fields: {
+      discountItem: connection.defaultDiscountItemId,
+      discountRate: (-amount).toFixed(2),
+    },
+  };
 }
 
 /**
@@ -121,7 +166,7 @@ export function netsuiteOrderRecordType(connection: Connection): 'salesorder' | 
  */
 const HEADER_REF_FIELDS: readonly string[] = [
   'subsidiary', 'entity', 'currency', 'location', 'orderStatus', 'paymentMethod',
-  'customForm', 'terms', 'employee', 'salesRep', 'nexus', 'shipMethod',
+  'customForm', 'terms', 'employee', 'salesRep', 'nexus', 'shipMethod', 'discountItem',
 ];
 
 const LINE_REF_FIELDS: readonly string[] = [
