@@ -222,6 +222,70 @@ Inspect state from the dpi CLI's PG env:
 SELECT * FROM sync_watermarks WHERE environment = 'dev';
 ```
 
+### Sync-health metrics + auth alert
+
+The handler and the catch-up poller emit App Insights `customMetrics` and
+`customEvents` so dashboards and alert rules can be built without
+KQL-parsing the handler log line. Every metric carries `environment` +
+`connectionId` as `properties` for splitting / filtering.
+
+| Metric / event | Type | Where | Properties |
+|---|---|---|---|
+| `dpi.order.import.success` | metric (count = 1) | handler — after `recordSuccess` | env, connection |
+| `dpi.order.import.time_ms` | metric (gauge, ms) | handler — claim → recordSuccess | env, connection |
+| `dpi.order.import.parked` | metric (count = 1) | `parkOutcome` (single funnel for all 5 park paths) | env, connection, stage, errorClass |
+| `dpi.order.import.ignored` | metric (count = 1) | eligibility-rejected branch | env, connection, reason |
+| `dpi.catchup.observed` | metric (count, value = observed orders) | poller — once per connection per fire | env, connection |
+| `dpi.catchup.enqueued` | metric (count, value = enqueued orders) | poller — once per connection per fire | env, connection |
+| `dpi.auth_error` | metric **and** event | classifier — when `errorClass === 'auth'` | env, connection, flow, message |
+
+The wrapper auto-detects on `APPLICATIONINSIGHTS_CONNECTION_STRING` (set by
+Bicep). When unset (local tests), it's a no-op stub — every `track*` call
+is a function pointer that does nothing. There's no auto-instrumentation;
+Functions' built-in trace/request/dependency collection already covers
+that surface.
+
+#### Example KQL: import rate per connection over the last hour
+
+```kusto
+customMetrics
+| where timestamp > ago(1h) and name == "dpi.order.import.success"
+| extend connectionId = tostring(customDimensions.connectionId)
+| summarize imports = sum(value) by bin(timestamp, 5m), connectionId
+| render timechart
+```
+
+#### Example KQL: p95 time-to-NS
+
+```kusto
+customMetrics
+| where timestamp > ago(24h) and name == "dpi.order.import.time_ms"
+| summarize p95 = percentile(value, 95), p50 = percentile(value, 50) by bin(timestamp, 1h)
+| render timechart
+```
+
+#### Auth-failure alert rule
+
+`dpi.auth_error` is a distinct `customEvent` precisely so an Azure Monitor
+log-based alert can fire on it. In the Azure Portal:
+
+```
+Monitor → Alerts → Create → Alert rule
+  Scope: dpi-ai-dev (or your App Insights resource)
+  Condition: Log → Custom log search
+    Query:
+      customEvents
+      | where name == "dpi.auth_error"
+    Measurement: Table rows
+    Threshold: greater than 0
+    Frequency: 5 minutes  Lookback: 5 minutes
+  Actions: your Action Group (email / PagerDuty / webhook)
+```
+
+A creds rotation in either Shopify or NetSuite will surface the moment the
+next webhook fails its auth check — well before SB exhausts redeliveries
+and the DLQ trigger writes the quarantine row.
+
 ### Dead-letter quarantine
 
 Service Bus moves a message to the subscription DLQ after

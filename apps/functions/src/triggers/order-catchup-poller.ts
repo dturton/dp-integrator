@@ -11,6 +11,7 @@ import type {
   XrefStore,
 } from '@dpi/core';
 import type { ShopifyGateway } from '@dpi/shopify-client';
+import type { Telemetry } from '../telemetry.js';
 import type { OrderWebhookMessage } from '../messages.js';
 
 /**
@@ -48,6 +49,8 @@ export interface CatchupDeps {
   readonly queue: QueueProducer<OrderWebhookMessage>;
   /** Defaults to `new Date()` — injectable for tests. */
   readonly now?: () => Date;
+  /** Optional App Insights surface for `dpi.catchup.*` metrics. */
+  readonly telemetry?: Telemetry;
 }
 
 export interface CatchupConfig {
@@ -177,6 +180,13 @@ async function pollOneConnection(
     connectionId,
     flow: CATCHUP_FLOW,
     cursor: newCursor,
+  });
+
+  deps.telemetry?.trackCatchupPoll({
+    environment: deps.environment,
+    connectionId,
+    observed: orders.length,
+    enqueued,
   });
 
   return {

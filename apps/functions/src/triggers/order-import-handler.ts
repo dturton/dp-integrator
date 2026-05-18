@@ -37,6 +37,7 @@ import {
   type CustomerResolution,
 } from '../activities/customer-resolver.js';
 import { classifyHandlerError, shouldRetry } from './error-classification.js';
+import type { Telemetry } from '../telemetry.js';
 import type { OrderWebhookMessage } from '../messages.js';
 
 /**
@@ -107,6 +108,13 @@ export interface OrderHandlerDeps {
    * must never block the NS upsert.
    */
   readonly outboundPayloadStore?: PayloadStore;
+  /**
+   * App Insights telemetry surface. Counts imports / parks / ignored,
+   * tracks time-to-NS, and emits `dpi.auth_error` customEvents so Azure
+   * Monitor alerts can fire on credential failures. Optional — tests use
+   * the no-op stub from `getTelemetry()`.
+   */
+  readonly telemetry?: Telemetry;
 }
 
 /**
@@ -216,6 +224,11 @@ export async function handleOrderMessage(
         order,
         ignoredReason: elig.reason,
         attemptCtx,
+      });
+      deps.telemetry?.trackIgnored({
+        environment: msg.environment,
+        connectionId: connection.connectionId,
+        reason: elig.reason,
       });
       return finish({
         kind: 'ignored_by_eligibility',
@@ -332,10 +345,23 @@ export async function handleOrderMessage(
     // 11. recordSuccess → xref status = 'synced' with the NS internal id
     await deps.xrefStore.recordSuccess(dedupKey, upserted.internalId, msg.orderGid);
 
+    // 11a. Telemetry — count this import and record claim→ns latency so
+    //      dashboards (and SLOs) can be built without KQL-parsing the
+    //      handler log line. Time delta is measured from the SB delivery
+    //      start when available, falls back to now otherwise.
+    const now = new Date();
+    const durationMs = attemptCtx
+      ? Math.max(0, now.getTime() - attemptCtx.startedAt.getTime())
+      : 0;
+    deps.telemetry?.trackImport({
+      environment: msg.environment,
+      connectionId: connection.connectionId,
+      durationMs,
+    });
+
     // 11b. Sync-log row: the per-order ledger for `dpi recent` /
     //      reconciliation. Snapshot the Shopify totals + NS link so we
     //      don't have to re-fetch from either system later.
-    const now = new Date();
     await writeSyncLog(deps, connection, msg, {
       status: 'imported',
       order,
@@ -437,16 +463,27 @@ async function classifyAndRoute(
     // against). Skip recording for transient because every SB redelivery
     // would otherwise multiply rows; the DLQ trigger M2-B catches the
     // permanently-stuck case.
-    if (errorClass === 'auth' && deps.errorStore) {
-      await deps.errorStore.record({
+    if (errorClass === 'auth') {
+      if (deps.errorStore) {
+        await deps.errorStore.record({
+          environment: msg.environment,
+          connectionId: connection.connectionId,
+          flow: 'order-import',
+          dedupKey: dedupKeyString(dedupKey),
+          errorClass,
+          message: detail,
+          ...(stack !== undefined ? { stack } : {}),
+          envelope: msg,
+        });
+      }
+      // Distinct customEvent (not just a metric) so Azure Monitor alert
+      // rules can fire on the event stream — every auth failure should
+      // page someone, regardless of how often they happen.
+      deps.telemetry?.trackAuthError({
         environment: msg.environment,
         connectionId: connection.connectionId,
         flow: 'order-import',
-        dedupKey: dedupKeyString(dedupKey),
-        errorClass,
         message: detail,
-        ...(stack !== undefined ? { stack } : {}),
-        envelope: msg,
       });
     }
     throw err;
@@ -501,6 +538,15 @@ async function parkOutcome(
       envelope: msg,
     });
   }
+  // Park metric — all five park paths route through here, so this is the
+  // single emit site. Stage + errorClass land on the metric's properties
+  // so dashboards can split by failure mode.
+  deps.telemetry?.trackPark({
+    environment: msg.environment,
+    connectionId: connection.connectionId,
+    stage: park.stage,
+    errorClass: park.errorClass,
+  });
   await writeSyncLog(deps, connection, msg, {
     status: 'parked',
     ...(park.order !== undefined ? { order: park.order } : {}),

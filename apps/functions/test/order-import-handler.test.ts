@@ -40,10 +40,34 @@ function defaultLookups(): InMemoryLookupResolver {
   });
 }
 
+interface TelemetrySpy {
+  imports: Array<{ environment: string; connectionId: string; durationMs: number }>;
+  parks: Array<{ environment: string; connectionId: string; stage: string; errorClass: string }>;
+  ignored: Array<{ environment: string; connectionId: string; reason: string }>;
+  catchupPolls: Array<{ environment: string; connectionId: string; observed: number; enqueued: number }>;
+  authErrors: Array<{ environment: string; connectionId: string; flow: string; message: string }>;
+}
+
+function buildTelemetrySpy(): { telemetry: import('../src/telemetry.js').Telemetry; spy: TelemetrySpy } {
+  const spy: TelemetrySpy = { imports: [], parks: [], ignored: [], catchupPolls: [], authErrors: [] };
+  return {
+    spy,
+    telemetry: {
+      trackImport: (a) => spy.imports.push(a),
+      trackPark: (a) => spy.parks.push(a),
+      trackIgnored: (a) => spy.ignored.push(a),
+      trackCatchupPoll: (a) => spy.catchupPolls.push(a),
+      trackAuthError: (a) => spy.authErrors.push(a),
+      flush: async () => undefined,
+    },
+  };
+}
+
 function buildDeps(args: {
   connections?: readonly Connection[];
   order?: ShopifyOrder;
   lookups?: InMemoryLookupResolver;
+  telemetry?: import('../src/telemetry.js').Telemetry;
 } = {}): {
   deps: OrderHandlerDeps;
   xrefStore: InMemoryXrefStore;
@@ -69,6 +93,7 @@ function buildDeps(args: {
     ns,
     guestCustomerInternalId: '99',
     lookupsFor: () => lookups,
+    ...(args.telemetry ? { telemetry: args.telemetry } : {}),
   };
   return { deps, xrefStore, shopify, ns, lookups };
 }
@@ -561,5 +586,67 @@ describe('handleOrderMessage — Slice M2-D retry visibility + payload archive',
     const outcome = await handleOrderMessage(deps, makeMessage(), attemptCtx());
     expect(outcome.kind).toBe('imported');
     // Nothing to assert beyond "doesn't throw" — the store isn't there to read from.
+  });
+});
+
+describe('handleOrderMessage — telemetry surface (sync-health metrics + auth alert)', () => {
+  it('emits trackImport with non-zero durationMs on a successful import', async () => {
+    const { telemetry, spy } = buildTelemetrySpy();
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
+    const { deps } = buildDeps({ order, telemetry });
+
+    const startedAt = new Date(Date.now() - 50);
+    const outcome = await handleOrderMessage(deps, makeMessage(), {
+      deliveryCount: 1,
+      startedAt,
+    });
+
+    expect(outcome.kind).toBe('imported');
+    expect(spy.imports).toHaveLength(1);
+    expect(spy.imports[0]?.environment).toBe('dev');
+    expect(spy.imports[0]?.connectionId).toBe('acme-us');
+    expect(spy.imports[0]?.durationMs).toBeGreaterThanOrEqual(0);
+    // No other counters should fire on the happy path.
+    expect(spy.parks).toHaveLength(0);
+    expect(spy.ignored).toHaveLength(0);
+    expect(spy.authErrors).toHaveLength(0);
+  });
+
+  it('emits trackPark with stage + errorClass on the mapping park path', async () => {
+    const { telemetry, spy } = buildTelemetrySpy();
+    const order = makeFakeOrder({
+      id: 'gid://shopify/Order/12345',
+      currencyCode: 'GBP', // no GBP row in defaultLookups → mapping park
+    });
+    const { deps } = buildDeps({ order, telemetry });
+    const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome.kind).toBe('parked');
+    expect(spy.parks).toHaveLength(1);
+    expect(spy.parks[0]?.stage).toBe('mapping');
+    expect(spy.parks[0]?.errorClass).toBe('unmapped_construct');
+    expect(spy.imports).toHaveLength(0);
+  });
+
+  it('emits trackIgnored when the eligibility predicate rejects the order', async () => {
+    const { telemetry, spy } = buildTelemetrySpy();
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/12345', test: true });
+    const { deps } = buildDeps({ order, telemetry });
+    const outcome = await handleOrderMessage(deps, makeMessage());
+    expect(outcome).toMatchObject({ kind: 'ignored_by_eligibility', reason: 'test_order' });
+    expect(spy.ignored).toHaveLength(1);
+    expect(spy.ignored[0]?.reason).toBe('test_order');
+  });
+
+  it('emits trackAuthError when a thrown error classifies as auth (and still re-throws for SB retry)', async () => {
+    const { telemetry, spy } = buildTelemetrySpy();
+    const { deps, shopify } = buildDeps({ telemetry });
+    // Inject a getOrder that throws a 401 → classifier returns 'auth'.
+    (shopify as unknown as { getOrder: typeof shopify.getOrder }).getOrder = async () => {
+      throw new Error('store-x returned 401: token expired');
+    };
+    await expect(handleOrderMessage(deps, makeMessage())).rejects.toThrow(/401/);
+    expect(spy.authErrors).toHaveLength(1);
+    expect(spy.authErrors[0]?.flow).toBe('order-import');
+    expect(spy.authErrors[0]?.message).toMatch(/401/);
   });
 });

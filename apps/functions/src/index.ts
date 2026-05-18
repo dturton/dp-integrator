@@ -11,6 +11,7 @@
  */
 import { getAppContext } from './bootstrap.js';
 import { PostgresLookupResolver } from './adapters/index.js';
+import { getTelemetry } from './telemetry.js';
 import { registerAdminReplay } from './triggers/admin-replay.js';
 import { registerNsDiagnostic } from './triggers/ns-diagnostic.js';
 import { registerOrderCatchupPoller } from './triggers/order-catchup-poller.js';
@@ -62,6 +63,7 @@ registerOrderImportHandler(() => {
     ...(ctx.orderSyncLog ? { orderSyncLog: ctx.orderSyncLog } : {}),
     ...(ctx.orderAttemptStore ? { orderAttemptStore: ctx.orderAttemptStore } : {}),
     ...(ctx.outboundPayloadStore ? { outboundPayloadStore: ctx.outboundPayloadStore } : {}),
+    telemetry: getTelemetry(),
   };
 });
 
@@ -105,5 +107,6 @@ registerOrderCatchupPoller(() => {
     watermarkStore: ctx.watermarkStore,
     shopify: ctx.shopify,
     queue: ctx.orderQueue,
+    telemetry: getTelemetry(),
   };
 });
