@@ -269,7 +269,7 @@ describe('buildOrderPayload — order-level discount (D7)', () => {
     // string '8123' becomes { id: '8123' }. discountRate stays as the raw
     // negative currency string '-47.45'.
     expect(r.payload['discountItem']).toEqual({ id: '8123' });
-    expect(r.payload['discountRate']).toBe('-47.45');
+    expect(r.payload['discountRate']).toBe(-47.45);
   });
 
   it('skips discount fields when order has no discount (totalDiscounts=0)', async () => {
@@ -318,7 +318,7 @@ describe('buildOrderPayload — order-level discount (D7)', () => {
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.payload['discountRate']).toBe('-12.35');
+    expect(r.payload['discountRate']).toBe(-12.35);
   });
 });
 

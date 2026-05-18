@@ -130,15 +130,17 @@ function mapOrderDiscount(connection: Connection, order: ShopifyOrder): Discount
       },
     };
   }
-  // NS REST treats `discountRate` as a string. A negative bare number is a
-  // currency amount (the Shopify-style flat discount); a value ending in
-  // `%` would be a percentage. We always emit the bare currency form
-  // because Shopify gives us the absolute amount, not a rate.
+  // NS REST `discountRate` accepts EITHER a number (currency amount, what
+  // we want — Shopify gives us the absolute amount) OR a string ending in
+  // `%` (percentage rate, not used here). Earlier rev emitted the value as
+  // a 2-decimal string and NS rejected with INVALID_VALUE on the Number
+  // field; round-trip through Number() to 2 decimals avoids both the float
+  // precision issue and the type mismatch.
   return {
     ok: true,
     fields: {
       discountItem: connection.defaultDiscountItemId,
-      discountRate: (-amount).toFixed(2),
+      discountRate: Number((-amount).toFixed(2)),
     },
   };
 }
