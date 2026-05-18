@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, AlertTriangle, CheckCircle2, FileJson, Inbox, Send } from 'lucide-react';
+import { ArrowLeft, RefreshCw, AlertTriangle, CheckCircle2, FileJson, Inbox, Send, ShoppingBag } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -357,6 +357,13 @@ function PayloadButtons({
         title={inboundTitle}
         uri={inboundIsFetchable ? attempt.inboundEnvelopeUri : null}
         onClick={() => onView(attempt.inboundEnvelopeUri!, `${orderName} — Inbound envelope`, baseSubtitle)}
+      />
+      <PayloadButton
+        icon={<ShoppingBag className="h-3 w-3" />}
+        label="Shopify"
+        title={attempt.shopifyPayloadUri ? undefined : 'Handler short-circuited before re-fetching the order'}
+        uri={attempt.shopifyPayloadUri}
+        onClick={() => onView(attempt.shopifyPayloadUri!, `${orderName} — Shopify order (Admin GraphQL)`, baseSubtitle)}
       />
       <PayloadButton
         icon={<Send className="h-3 w-3" />}

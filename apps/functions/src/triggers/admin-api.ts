@@ -285,6 +285,7 @@ export async function handleAdminOrderDetail(
     outbound_payload_uri: string | null;
     ns_response_uri: string | null;
     ns_response_status: number | null;
+    shopify_payload_uri: string | null;
     payload_digest: Record<string, unknown> | null;
     started_at: string;
     finished_at: string;
@@ -293,6 +294,7 @@ export async function handleAdminOrderDetail(
     `SELECT delivery_count, outcome, stage, error_class, detail,
             inbound_envelope_uri, outbound_payload_uri,
             ns_response_uri, ns_response_status,
+            shopify_payload_uri,
             payload_digest,
             started_at::text AS started_at, finished_at::text AS finished_at, duration_ms
        FROM order_attempt
@@ -341,6 +343,7 @@ export async function handleAdminOrderDetail(
         outboundPayloadUri: a.outbound_payload_uri,
         nsResponseUri: a.ns_response_uri,
         nsResponseStatus: a.ns_response_status,
+        shopifyPayloadUri: a.shopify_payload_uri,
         payloadDigest: a.payload_digest,
         startedAt: a.started_at,
         finishedAt: a.finished_at,

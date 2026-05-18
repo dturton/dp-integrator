@@ -112,6 +112,7 @@ export interface OrderAttempt {
   readonly outboundPayloadUri: string | null;
   readonly nsResponseUri: string | null;
   readonly nsResponseStatus: number | null;
+  readonly shopifyPayloadUri: string | null;
   readonly payloadDigest: Record<string, unknown> | null;
   readonly startedAt: string;
   readonly finishedAt: string;

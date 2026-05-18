@@ -450,13 +450,14 @@ describe('handleOrderMessage — Slice M2-D retry visibility + payload archive',
       lineCount: 1,
       subsidiaryId: '1',
     });
-    // NS-response capture (the payload-viewer slice): blob put fires twice
-    // per import — once for the outbound NS request, once for the NS
-    // response. ns_response_status surfaces NS's HTTP code so the UI can
-    // color the Response button without fetching the blob.
+    // Payload-viewer slice: three blob puts per import — Shopify order
+    // (input), outbound NS request (built), NS response (output).
+    // ns_response_status surfaces NS's HTTP code so the UI can color the
+    // Response button without fetching the blob.
     expect(rows[0]?.nsResponseUri).toMatch(/-response\.json$/);
     expect(rows[0]?.nsResponseStatus).toBe(204);
-    expect(outboundPayloadStore.putCount()).toBe(2);
+    expect(rows[0]?.shopifyPayloadUri).toMatch(/-shopify\.json$/);
+    expect(outboundPayloadStore.putCount()).toBe(3);
 
     // order_sync_log denormalization
     const log = await orderSyncLog.findByOrderGid({
@@ -493,8 +494,12 @@ describe('handleOrderMessage — Slice M2-D retry visibility + payload archive',
     });
     expect(rows[0]?.outboundPayloadUri).toBeUndefined();
     expect(rows[0]?.payloadDigest).toBeUndefined();
-    // Blob store was never invoked — pipeline parked before the NS write.
-    expect(outboundPayloadStore.putCount()).toBe(0);
+    // NS write never happened, but the Shopify-order archive runs BEFORE the
+    // mapping step so parked attempts still have a Shopify payload archived
+    // (that's the whole point — operators can see what Shopify sent that
+    // failed to map).
+    expect(rows[0]?.shopifyPayloadUri).toMatch(/-shopify\.json$/);
+    expect(outboundPayloadStore.putCount()).toBe(1);
   });
 
   it('records the delivery_count from attemptCtx (redelivery → row says 3)', async () => {
@@ -517,11 +522,13 @@ describe('handleOrderMessage — Slice M2-D retry visibility + payload archive',
     expect(log?.lastDeliveryCount).toBe(3);
   });
 
-  it('swallows outbound blob-store failures — NS upsert + attempt row still happen, outbound URI is null', async () => {
+  it('swallows blob-store failures — NS upsert + attempt row still happen, failed URI is null', async () => {
     const order = makeFakeOrder({ id: 'gid://shopify/Order/12345' });
     const { deps, ns } = buildDeps({ order });
     const orderAttemptStore = new InMemoryOrderAttemptStore();
     const outboundPayloadStore = new InMemoryPayloadStore();
+    // First put is the Shopify-order archive (right after getOrder); fail
+    // that one to assert the rest of the pipeline still runs to completion.
     outboundPayloadStore.failNext(new Error('blob 503 — Azure busy'));
     const wired: OrderHandlerDeps = { ...deps, orderAttemptStore, outboundPayloadStore };
 
@@ -533,7 +540,11 @@ describe('handleOrderMessage — Slice M2-D retry visibility + payload archive',
       environment: 'dev', connectionId: acme.connectionId, shopifyOrderGid: 'gid://shopify/Order/12345',
     });
     expect(rows[0]?.outcome).toBe('imported');
-    expect(rows[0]?.outboundPayloadUri).toBeUndefined();
+    // The failed Shopify archive leaves the URI null, while the outbound +
+    // NS response archives still went through.
+    expect(rows[0]?.shopifyPayloadUri).toBeUndefined();
+    expect(rows[0]?.outboundPayloadUri).toMatch(/^mem:\/\/outbound\//);
+    expect(rows[0]?.nsResponseUri).toMatch(/-response\.json$/);
     // Digest still built — it's derived from the in-memory payload, blob-independent.
     expect(rows[0]?.payloadDigest).toBeDefined();
   });
@@ -559,9 +570,10 @@ describe('handleOrderMessage — Slice M2-D retry visibility + payload archive',
     expect(rows[0]?.outboundPayloadUri).toBeUndefined();
     expect(rows[0]?.payloadDigest).toBeUndefined();
     expect(rows[1]).toMatchObject({ deliveryCount: 1, outcome: 'imported' });
-    // Blob puts: 2 for the imported attempt (outbound NS request + NS
-    // response), 0 for the short-circuit. The redelivery never reaches NS.
-    expect(outboundPayloadStore.putCount()).toBe(2);
+    // Blob puts: 3 for the imported attempt (Shopify input + outbound NS
+    // request + NS response), 0 for the short-circuit. The redelivery
+    // returns already_synced from xref before re-fetching anything.
+    expect(outboundPayloadStore.putCount()).toBe(3);
   });
 
   it('transient throw still records an attempt row (outcome=transient_throw) before re-throwing', async () => {

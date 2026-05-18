@@ -28,6 +28,7 @@ export class PostgresOrderAttemptStore implements OrderAttemptStore {
         outcome, stage, error_class, detail,
         inbound_envelope_uri, outbound_payload_uri,
         ns_response_uri, ns_response_status,
+        shopify_payload_uri,
         payload_digest,
         started_at, finished_at, duration_ms
       )
@@ -37,8 +38,9 @@ export class PostgresOrderAttemptStore implements OrderAttemptStore {
         $7, $8, $9, $10,
         $11, $12,
         $13, $14,
-        $15::jsonb,
-        $16, $17, $18
+        $15,
+        $16::jsonb,
+        $17, $18, $19
       )
       RETURNING *
       `,
@@ -57,6 +59,7 @@ export class PostgresOrderAttemptStore implements OrderAttemptStore {
         input.outboundPayloadUri ?? null,
         input.nsResponseUri ?? null,
         input.nsResponseStatus ?? null,
+        input.shopifyPayloadUri ?? null,
         input.payloadDigest !== undefined ? JSON.stringify(input.payloadDigest) : null,
         input.startedAt,
         input.finishedAt,
@@ -100,6 +103,7 @@ interface OrderAttemptDb {
   outbound_payload_uri: string | null;
   ns_response_uri: string | null;
   ns_response_status: number | null;
+  shopify_payload_uri: string | null;
   payload_digest: Record<string, unknown> | null;
   started_at: Date;
   finished_at: Date;
@@ -124,6 +128,7 @@ function toRow(row: OrderAttemptDb): OrderAttempt {
     ...(row.outbound_payload_uri !== null ? { outboundPayloadUri: row.outbound_payload_uri } : {}),
     ...(row.ns_response_uri !== null ? { nsResponseUri: row.ns_response_uri } : {}),
     ...(row.ns_response_status !== null ? { nsResponseStatus: row.ns_response_status } : {}),
+    ...(row.shopify_payload_uri !== null ? { shopifyPayloadUri: row.shopify_payload_uri } : {}),
     ...(row.payload_digest !== null ? { payloadDigest: row.payload_digest } : {}),
     startedAt: row.started_at,
     finishedAt: row.finished_at,

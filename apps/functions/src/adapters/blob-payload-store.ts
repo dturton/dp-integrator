@@ -156,7 +156,10 @@ function blobNameFor(ctx: PayloadStoreContext): string {
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
   const ts = d.toISOString().replace(/[:.]/g, '-');
-  const suffix = ctx.kind === 'ns_response' ? '-response.json' : '.json';
+  const suffix =
+    ctx.kind === 'ns_response' ? '-response.json' :
+    ctx.kind === 'shopify_order' ? '-shopify.json' :
+    '.json';
   return `${ctx.environment}/${ctx.connectionId}/${yyyy}/${mm}/${dd}/${id}-attempt${ctx.deliveryCount}-${ts}${suffix}`;
 }
 

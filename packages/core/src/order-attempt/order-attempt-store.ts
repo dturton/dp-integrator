@@ -53,6 +53,15 @@ export interface OrderAttempt {
   readonly nsResponseUri?: string;
   /** HTTP status code NS returned (e.g. 204, 400, 422). Mirrors nsResponseUri. */
   readonly nsResponseStatus?: number;
+  /**
+   * Blob URI of the authoritative Shopify order body — the result of
+   * `deps.shopify.getOrder(...)` the handler re-fetched right after picking
+   * up the SB message. This is the *input* to mapping/balancing, distinct
+   * from the small webhook envelope on `inboundEnvelopeUri`. NULL when the
+   * handler short-circuited (already_synced / already_claimed) or when
+   * getOrder itself threw.
+   */
+  readonly shopifyPayloadUri?: string;
   readonly payloadDigest?: Record<string, unknown>;
   readonly startedAt: Date;
   readonly finishedAt: Date;
@@ -75,6 +84,7 @@ export interface OrderAttemptInput {
   readonly outboundPayloadUri?: string;
   readonly nsResponseUri?: string;
   readonly nsResponseStatus?: number;
+  readonly shopifyPayloadUri?: string;
   readonly payloadDigest?: Record<string, unknown>;
   readonly startedAt: Date;
   readonly finishedAt: Date;
@@ -119,6 +129,7 @@ export class InMemoryOrderAttemptStore implements OrderAttemptStore {
       ...(input.outboundPayloadUri !== undefined ? { outboundPayloadUri: input.outboundPayloadUri } : {}),
       ...(input.nsResponseUri !== undefined ? { nsResponseUri: input.nsResponseUri } : {}),
       ...(input.nsResponseStatus !== undefined ? { nsResponseStatus: input.nsResponseStatus } : {}),
+      ...(input.shopifyPayloadUri !== undefined ? { shopifyPayloadUri: input.shopifyPayloadUri } : {}),
       ...(input.payloadDigest !== undefined ? { payloadDigest: input.payloadDigest } : {}),
       startedAt: input.startedAt,
       finishedAt: input.finishedAt,

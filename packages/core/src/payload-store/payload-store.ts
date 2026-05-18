@@ -13,13 +13,15 @@ import type { Environment } from '../env.js';
  */
 
 /**
- * `outbound` — the JSON we shipped to NS. Default kind, preserves the
- * existing per-attempt path shape so legacy reads keep working.
- * `ns_response` — what NS returned (success or structured error). Same
- * attempt, same path layout, with a `-response.json` suffix so both blobs
- * sit next to each other in the date partition.
+ * `outbound`      — the JSON we shipped to NS. Default kind, preserves the
+ *                   existing per-attempt path shape so legacy reads keep working.
+ * `ns_response`   — what NS returned (success or structured error). `-response.json`
+ *                   suffix; sits next to the outbound blob in the same date partition.
+ * `shopify_order` — the authoritative Shopify order body the handler fetched via
+ *                   Admin GraphQL right after picking up the SB message — the
+ *                   *input* to mapping/balancing. `-shopify.json` suffix.
  */
-export type PayloadKind = 'outbound' | 'ns_response';
+export type PayloadKind = 'outbound' | 'ns_response' | 'shopify_order';
 
 export interface PayloadStoreContext {
   readonly environment: Environment;
@@ -85,6 +87,9 @@ function pathFor(ctx: PayloadStoreContext): string {
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
   const ts = d.toISOString().replace(/[:.]/g, '-');
-  const suffix = ctx.kind === 'ns_response' ? '-response.json' : '.json';
+  const suffix =
+    ctx.kind === 'ns_response' ? '-response.json' :
+    ctx.kind === 'shopify_order' ? '-shopify.json' :
+    '.json';
   return `mem://outbound/${ctx.environment}/${ctx.connectionId}/${yyyy}/${mm}/${dd}/${id}-attempt${ctx.deliveryCount}-${ts}${suffix}`;
 }

@@ -180,17 +180,17 @@ export async function handleOrderMessage(
   // retries.
   if (claim.outcome === 'already_synced') {
     const o: OrderHandlerOutcome = { kind: 'already_synced', connectionId: connection.connectionId, orderGid: msg.orderGid };
-    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined, undefined, undefined);
+    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined, undefined, undefined, undefined);
     return o;
   }
   if (claim.outcome === 'already_claimed') {
     const o: OrderHandlerOutcome = { kind: 'already_claimed', connectionId: connection.connectionId, orderGid: msg.orderGid };
-    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined, undefined, undefined);
+    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined, undefined, undefined, undefined);
     return o;
   }
   if (claim.outcome === 'ignored') {
     const o: OrderHandlerOutcome = { kind: 'ignored', connectionId: connection.connectionId, orderGid: msg.orderGid };
-    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined, undefined, undefined);
+    await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined, undefined, undefined, undefined);
     return o;
   }
   // claim.outcome === 'claimed' — proceed. Everything from here on is wrapped
@@ -211,11 +211,29 @@ export async function handleOrderMessage(
   let outboundPayloadUri: string | undefined;
   let nsResponseUri: string | undefined;
   let nsResponseStatus: number | undefined;
+  let shopifyPayloadUri: string | undefined;
   let payloadDigest: Record<string, unknown> | undefined;
   const finish = (o: OrderHandlerOutcome): OrderHandlerOutcome => (outcome = o);
   try {
     // 3. Re-fetch authoritative order
     order = await deps.shopify.getOrder(connection, msg.orderGid);
+
+    // 3b. Archive the Shopify order body — the *input* to mapping. Useful
+    // for debugging mapping/balancing/item_resolution parks ("what did
+    // Shopify actually send us?"). Same best-effort `.catch` pattern as
+    // outbound + ns_response — debug fuel must not block the SB ack.
+    if (deps.outboundPayloadStore && attemptCtx) {
+      shopifyPayloadUri = await deps.outboundPayloadStore
+        .put(order as unknown as Record<string, unknown>, {
+          environment: msg.environment,
+          connectionId: connection.connectionId,
+          shopifyOrderGid: msg.orderGid,
+          deliveryCount: attemptCtx.deliveryCount,
+          attemptStartedAt: attemptCtx.startedAt,
+          kind: 'shopify_order',
+        })
+        .catch(() => undefined);
+    }
 
     // 4. Eligibility predicate
     const elig = checkEligibility(order, msg.topic);
@@ -479,6 +497,7 @@ export async function handleOrderMessage(
       payloadDigest,
       nsResponseUri,
       nsResponseStatus,
+      shopifyPayloadUri,
     );
   }
 }
@@ -719,6 +738,7 @@ async function recordAttempt(
   payloadDigest: Record<string, unknown> | undefined,
   nsResponseUri: string | undefined,
   nsResponseStatus: number | undefined,
+  shopifyPayloadUri: string | undefined,
 ): Promise<void> {
   if (!deps.orderAttemptStore || !attemptCtx) return;
   const finishedAt = new Date();
@@ -741,6 +761,7 @@ async function recordAttempt(
     ...(outboundPayloadUri ? { outboundPayloadUri } : {}),
     ...(nsResponseUri ? { nsResponseUri } : {}),
     ...(nsResponseStatus !== undefined ? { nsResponseStatus } : {}),
+    ...(shopifyPayloadUri ? { shopifyPayloadUri } : {}),
     ...(payloadDigest ? { payloadDigest } : {}),
     startedAt: attemptCtx.startedAt,
     finishedAt,
