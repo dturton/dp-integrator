@@ -10,6 +10,8 @@ import {
   type Environment,
   type ErrorClass,
   type ErrorStore,
+  type OrderSyncLogInput,
+  type OrderSyncLogStore,
   type XrefStore,
 } from '@dpi/core';
 import type { LookupResolver, MapDeriveRegistry } from '@dpi/mapping-engine';
@@ -79,6 +81,13 @@ export interface OrderHandlerDeps {
    * `PostgresErrorStore` when PG is wired.
    */
   readonly errorStore?: ErrorStore;
+  /**
+   * Per-order ledger (one row per terminal outcome — imported / parked /
+   * ignored_by_eligibility). Carries a snapshot of Shopify totals + NS link
+   * + park reason so `dpi recent` and reconciliation reports don't need to
+   * re-fetch from either system.
+   */
+  readonly orderSyncLog?: OrderSyncLogStore;
 }
 
 export type OrderHandlerOutcome =
@@ -138,14 +147,23 @@ export async function handleOrderMessage(
   // in classifyAndPark below so that unhandled throws are routed through the
   // brief's transient/data/auth/unknown taxonomy (Slice M2-C) instead of all
   // collapsing into SB redelivery loops.
+  //
+  // `order` lives outside the try so the catch's classifier can snapshot it
+  // into the sync log when the throw happened after getOrder returned.
+  let order: ShopifyOrder | undefined;
   try {
     // 3. Re-fetch authoritative order
-    const order: ShopifyOrder = await deps.shopify.getOrder(connection, msg.orderGid);
+    order = await deps.shopify.getOrder(connection, msg.orderGid);
 
     // 4. Eligibility predicate
     const elig = checkEligibility(order, msg.topic);
     if (!elig.eligible) {
       await deps.xrefStore.markIgnored(dedupKey);
+      await writeSyncLog(deps, connection, msg, {
+        status: 'ignored',
+        order,
+        ignoredReason: elig.reason,
+      });
       return {
         kind: 'ignored_by_eligibility',
         connectionId: connection.connectionId,
@@ -177,6 +195,7 @@ export async function handleOrderMessage(
         stage: 'mapping',
         detail: payloadResult.parked.detail,
         errorClass: 'unmapped_construct',
+        order,
       });
     }
     const draft: NsOrderPayload = payloadResult.payload;
@@ -195,6 +214,7 @@ export async function handleOrderMessage(
         stage: 'balancing',
         detail: balanced.parked.detail,
         errorClass: 'data',
+        order,
       });
     }
     const balancedPayload = balanced.payload.payload;
@@ -209,6 +229,7 @@ export async function handleOrderMessage(
         stage: 'item_resolution',
         detail: resolved.parked.detail,
         errorClass: 'unmapped_construct',
+        order,
       });
     }
     const finalPayload = resolved.payload;
@@ -224,6 +245,19 @@ export async function handleOrderMessage(
 
     // 11. recordSuccess → xref status = 'synced' with the NS internal id
     await deps.xrefStore.recordSuccess(dedupKey, upserted.internalId, msg.orderGid);
+
+    // 11b. Sync-log row: the per-order ledger for `dpi recent` /
+    //      reconciliation. Snapshot the Shopify totals + NS link so we
+    //      don't have to re-fetch from either system later.
+    const now = new Date();
+    await writeSyncLog(deps, connection, msg, {
+      status: 'imported',
+      order,
+      nsAccountId: connection.nsAccountId,
+      nsRecordType: recordType,
+      nsInternalId: upserted.internalId,
+      syncedAt: now,
+    });
 
     // 12. (slice E2) Optional NS→Shopify write-back: tag the Shopify order
     //     with the NS internal id so storefront-side ops can see which
@@ -267,7 +301,7 @@ export async function handleOrderMessage(
       customer,
     };
   } catch (err) {
-    return classifyAndRoute(deps, dedupKey, connection, msg, err);
+    return classifyAndRoute(deps, dedupKey, connection, msg, err, order);
   }
 }
 
@@ -295,6 +329,7 @@ async function classifyAndRoute(
   connection: Connection,
   msg: OrderWebhookMessage,
   err: unknown,
+  order: ShopifyOrder | undefined,
 ): Promise<OrderHandlerOutcome> {
   const errorClass = classifyHandlerError(err);
   const detail = err instanceof Error ? err.message : String(err);
@@ -328,6 +363,7 @@ async function classifyAndRoute(
     detail,
     errorClass,
     ...(stack !== undefined ? { stack } : {}),
+    ...(order !== undefined ? { order } : {}),
   });
 }
 
@@ -336,6 +372,8 @@ interface ParkInput {
   readonly detail: string;
   readonly errorClass: ErrorClass;
   readonly stack?: string;
+  /** Available when the throw / mapping-park happened after getOrder; absent for the OrderNotFoundError + pre-fetch paths. */
+  readonly order?: ShopifyOrder;
 }
 
 /**
@@ -364,6 +402,13 @@ async function parkOutcome(
       envelope: msg,
     });
   }
+  await writeSyncLog(deps, connection, msg, {
+    status: 'parked',
+    ...(park.order !== undefined ? { order: park.order } : {}),
+    parkStage: park.stage,
+    parkDetail: park.detail,
+    parkErrorClass: park.errorClass,
+  });
   return {
     kind: 'parked',
     connectionId: connection.connectionId,
@@ -372,6 +417,66 @@ async function parkOutcome(
     detail: park.detail,
     errorClass: park.errorClass,
   };
+}
+
+/**
+ * Compose the per-order ledger row for `orderSyncLog`. `order` is optional —
+ * absent only on the pre-fetch parked paths (OrderNotFoundError /
+ * unparseable message reach the handler). When absent we still emit the
+ * minimal row keyed on the GID so reconciliation never silently loses an
+ * order.
+ */
+interface SyncLogShape {
+  readonly status: 'imported' | 'parked' | 'ignored';
+  readonly order?: ShopifyOrder;
+  readonly nsAccountId?: string;
+  readonly nsRecordType?: 'salesorder' | 'cashsale';
+  readonly nsInternalId?: string;
+  readonly nsTranId?: string;
+  readonly syncedAt?: Date;
+  readonly parkStage?: string;
+  readonly parkDetail?: string;
+  readonly parkErrorClass?: string;
+  readonly ignoredReason?: string;
+}
+
+async function writeSyncLog(
+  deps: OrderHandlerDeps,
+  connection: Connection,
+  msg: OrderWebhookMessage,
+  shape: SyncLogShape,
+): Promise<void> {
+  if (!deps.orderSyncLog) return;
+  const o = shape.order;
+  const numericTail = /\/(\d+)$/.exec(msg.orderGid)?.[1] ?? msg.orderGid;
+  const input: OrderSyncLogInput = {
+    environment: msg.environment,
+    connectionId: connection.connectionId,
+    shopifyOrderGid: msg.orderGid,
+    shopifyOrderId: numericTail,
+    status: shape.status,
+    ...(o?.name !== undefined ? { shopifyOrderName: o.name } : {}),
+    ...(o?.createdAt !== undefined ? { shopifyCreatedAt: new Date(o.createdAt) } : {}),
+    ...(o?.processedAt !== undefined ? { shopifyProcessedAt: new Date(o.processedAt) } : {}),
+    ...(o?.updatedAt !== undefined ? { shopifyUpdatedAt: new Date(o.updatedAt) } : {}),
+    ...(o?.customer?.email !== undefined ? { customerEmail: o.customer.email } : {}),
+    ...(o?.currencyCode !== undefined ? { currencyCode: o.currencyCode } : {}),
+    ...(o?.totalPrice?.amount !== undefined ? { totalPrice: o.totalPrice.amount } : {}),
+    ...(o?.subtotalPrice?.amount !== undefined ? { subtotalPrice: o.subtotalPrice.amount } : {}),
+    ...(o?.totalTax?.amount !== undefined ? { totalTax: o.totalTax.amount } : {}),
+    ...(o?.totalDiscounts?.amount !== undefined ? { totalDiscounts: o.totalDiscounts.amount } : {}),
+    ...(o?.totalShippingPrice?.amount !== undefined ? { totalShipping: o.totalShippingPrice.amount } : {}),
+    ...(shape.nsAccountId !== undefined ? { nsAccountId: shape.nsAccountId } : {}),
+    ...(shape.nsRecordType !== undefined ? { nsRecordType: shape.nsRecordType } : {}),
+    ...(shape.nsInternalId !== undefined ? { nsInternalId: shape.nsInternalId } : {}),
+    ...(shape.nsTranId !== undefined ? { nsTranId: shape.nsTranId } : {}),
+    ...(shape.syncedAt !== undefined ? { syncedAt: shape.syncedAt } : {}),
+    ...(shape.parkStage !== undefined ? { parkStage: shape.parkStage } : {}),
+    ...(shape.parkDetail !== undefined ? { parkDetail: shape.parkDetail } : {}),
+    ...(shape.parkErrorClass !== undefined ? { parkErrorClass: shape.parkErrorClass } : {}),
+    ...(shape.ignoredReason !== undefined ? { ignoredReason: shape.ignoredReason } : {}),
+  };
+  await deps.orderSyncLog.upsert(input);
 }
 
 interface ParseSuccess { readonly ok: true; readonly value: OrderWebhookMessage; }

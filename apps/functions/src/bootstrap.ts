@@ -9,6 +9,7 @@ import {
   type Environment,
   type ErrorStore,
   type GovernorConfig,
+  type OrderSyncLogStore,
   type QueueProducer,
   type SecretProvider,
   type SyncWatermarkStore,
@@ -26,6 +27,7 @@ import {
   BlobEnvelopeStore,
   KeyVaultSecretProvider,
   PostgresErrorStore,
+  PostgresOrderSyncLogStore,
   PostgresSyncWatermarkStore,
   PostgresXrefStore,
   ServiceBusQueueProducer,
@@ -61,6 +63,8 @@ export interface AppContext {
   readonly errorStore?: ErrorStore;
   /** Slice M3-A — catch-up poller cursor per (connection, flow). */
   readonly watermarkStore?: SyncWatermarkStore;
+  /** Per-order ledger; powers `dpi recent` + reconciliation. */
+  readonly orderSyncLog?: OrderSyncLogStore;
 }
 
 let cached: AppContext | undefined;
@@ -109,11 +113,13 @@ function buildAppContext(): AppContext {
   let xrefStore: XrefStore | undefined;
   let errorStore: ErrorStore | undefined;
   let watermarkStore: SyncWatermarkStore | undefined;
+  let orderSyncLog: OrderSyncLogStore | undefined;
   if (pgHost && pgDatabase && pgUser) {
     pgPool = buildPgPool({ host: pgHost, database: pgDatabase, user: pgUser });
     xrefStore = new PostgresXrefStore(pgPool);
     errorStore = new PostgresErrorStore(pgPool);
     watermarkStore = new PostgresSyncWatermarkStore(pgPool);
+    orderSyncLog = new PostgresOrderSyncLogStore(pgPool);
   }
 
   return {
@@ -135,6 +141,7 @@ function buildAppContext(): AppContext {
     ...(xrefStore ? { xrefStore } : {}),
     ...(errorStore ? { errorStore } : {}),
     ...(watermarkStore ? { watermarkStore } : {}),
+    ...(orderSyncLog ? { orderSyncLog } : {}),
   };
 }
 

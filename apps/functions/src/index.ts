@@ -59,6 +59,7 @@ registerOrderImportHandler(() => {
     guestCustomerInternalId: ctx.guestCustomerInternalId,
     lookupsFor: (connection) => new PostgresLookupResolver(pool, connection),
     ...(ctx.errorStore ? { errorStore: ctx.errorStore } : {}),
+    ...(ctx.orderSyncLog ? { orderSyncLog: ctx.orderSyncLog } : {}),
   };
 });
 

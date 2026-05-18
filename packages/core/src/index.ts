@@ -63,6 +63,16 @@ export {
   type SyncWatermarkStore,
 } from './watermark/sync-watermark-store.js';
 
+// Order sync log (per-order ledger for `dpi recent` + reconciliation)
+export {
+  InMemoryOrderSyncLogStore,
+  type OrderSyncLog,
+  type OrderSyncLogInput,
+  type OrderSyncLogListFilter,
+  type OrderSyncLogStatus,
+  type OrderSyncLogStore,
+} from './order-sync-log/order-sync-log-store.js';
+
 // Replay (M2)
 export {
   requestReplay,
