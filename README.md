@@ -392,13 +392,53 @@ pnpm --filter @dpi/admin-ui dev
 The proxy target defaults to `dpi-func-dev-auwpabjrr5flu.azurewebsites.net`;
 override with `VITE_DEV_API_TARGET=…` if needed.
 
-### Production hosting (slice follow-up)
+### Production hosting (Azure Static Web Apps)
 
-Azure Static Web Apps will host the static bundle and proxy `/api/*` to the
-linked Function App. Easy Auth (Entra) gates the whole site; an
-`staticwebapp.config.json` in `public/` declares the SPA fallback + role
-requirements. The SWA infra Bicep + CI deploy step lands in a follow-up
-slice — for now run locally against dev.
+The Static Web App is provisioned by `infra/modules/static-web-app.bicep`
+(name pattern `dpi-swa-<env>`, Free SKU). The Deploy workflow handles
+everything end-to-end:
+
+1. **Build** — `pnpm --filter @dpi/admin-ui build` produces `apps/admin-ui/dist`
+2. **Resolve + link** — fetches the SWA name in the env's RG, calls
+   `az staticwebapp backends link` (idempotent) so `/api/*` requests
+   route to the freshly-deployed Function App
+3. **Upload** — `Azure/static-web-apps-deploy@v1` pushes `dist/` using a
+   deploy token pulled at the same step
+
+After the first infra deploy succeeds, the SWA URL prints in the workflow
+summary (`https://<random>.azurestaticapps.net`).
+
+#### Entra authentication (one-time)
+
+The shipped `staticwebapp.config.json` already enforces `allowedRoles:
+['authenticated']` on every route. To wire Entra:
+
+```bash
+# In the Azure portal: SWA → Authentication → Add identity provider → Microsoft
+# Or via CLI (Entra app registration first, then SWA auth config):
+az staticwebapp identity assign --name dpi-swa-dev --resource-group rg-dpi-dev
+```
+
+After Entra is configured, unauthenticated requests redirect to
+`/.auth/login/aad`; the post-login user identity is available to the
+function app via the `x-ms-client-principal` header on every `/api/*`
+call (we don't read it today — function-key auth still gates the API —
+but future RBAC checks land there).
+
+### What's in the UI today
+
+| View | Path | Endpoint |
+|---|---|---|
+| Dashboard | `/` | `GET /api/admin/status` |
+| Orders browser | `/orders` | `GET /api/admin/orders` |
+| Order detail | `/orders/:id` | `GET /api/admin/orders/detail` |
+| Parked queue | `/parked` | `GET /api/admin/orders?status=parked` |
+| Reconciliation | `/reconciliation` | `GET /api/admin/reconciliation`, `POST /api/admin/reconcile/run` |
+| Connections | `/connections` | `GET /api/admin/connections` |
+
+Order detail + Parked both expose **Replay** buttons (POST to
+`/api/ops/replay`); Parked supports bulk-select. Reconciliation has a
+**Run now** button that triggers an on-demand sweep.
 
 ## Working with the NetSuite SDK
 
