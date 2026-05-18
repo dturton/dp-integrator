@@ -338,13 +338,24 @@ function PayloadButtons({
     attempt.nsResponseStatus !== null && attempt.nsResponseStatus !== undefined
       ? `Response ${attempt.nsResponseStatus}`
       : 'Response';
+  // Replays use a synthetic `replay://` URI marker on the inbound envelope
+  // column because we never receive a new webhook on a replay. The proxy
+  // would reject it with 400 bad_origin — disable the button instead.
+  const inboundIsFetchable =
+    attempt.inboundEnvelopeUri !== null &&
+    attempt.inboundEnvelopeUri.startsWith('https://');
+  const inboundTitle = inboundIsFetchable
+    ? undefined
+    : attempt.inboundEnvelopeUri?.startsWith('replay://')
+      ? 'Replay delivery — no inbound webhook was received'
+      : 'No inbound envelope archived';
   return (
     <div className="flex flex-wrap items-center gap-1">
       <PayloadButton
         icon={<Inbox className="h-3 w-3" />}
         label="Inbound"
-        title={attempt.inboundEnvelopeUri ? undefined : 'No envelope archived (replay messages have no inbound)'}
-        uri={attempt.inboundEnvelopeUri}
+        title={inboundTitle}
+        uri={inboundIsFetchable ? attempt.inboundEnvelopeUri : null}
         onClick={() => onView(attempt.inboundEnvelopeUri!, `${orderName} — Inbound envelope`, baseSubtitle)}
       />
       <PayloadButton
