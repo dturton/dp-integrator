@@ -166,6 +166,31 @@ describe('resolveCustomer', () => {
     expect(rec?.payload['addressbook']).toBeUndefined();
   });
 
+  it('falls back to the order address phone when the customer has no email or default-address phone', async () => {
+    const ns = new FakeNetSuiteGateway();
+    const customer: ShopifyCustomer = {
+      id: 'gid://shopify/Customer/9944208703651',
+      firstName: 'Jose',
+      lastName: 'Sardeneta',
+    };
+    await resolveCustomer(
+      { ns },
+      connection,
+      customer,
+      { guestCustomerInternalId: '99' },
+      {
+        shipping: {
+          firstName: 'Jose', lastName: 'Sardeneta', address1: '8138 Birdsnest Dr',
+          city: 'Birdsnest', provinceCode: 'VA', zip: '23307', countryCode: 'US',
+          phone: '7577099567',
+        },
+      },
+    );
+    const rec = ns.getRecords(connection.nsAccountId, 'customer' as never).get(customer.id);
+    expect(rec?.payload['phone']).toBe('7577099567');
+    expect(rec?.payload['email']).toBeUndefined();
+  });
+
   it('partitions records by NS account (multi-tenant isolation)', async () => {
     const ns = new FakeNetSuiteGateway();
     const a: Connection = { ...connection, nsAccountId: 'acct-A' };
