@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, ListOrdered } from 'lucide-react';
+import { LayoutDashboard, ListOrdered, ParkingCircle, Scale } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -17,6 +17,8 @@ export function AppLayout(): React.ReactElement {
         <nav className="flex-1 space-y-0.5 p-2">
           <NavItem to="/" icon={<LayoutDashboard className="h-4 w-4" />} label="Dashboard" end />
           <NavItem to="/orders" icon={<ListOrdered className="h-4 w-4" />} label="Orders" />
+          <NavItem to="/parked" icon={<ParkingCircle className="h-4 w-4" />} label="Parked" />
+          <NavItem to="/reconciliation" icon={<Scale className="h-4 w-4" />} label="Reconciliation" />
         </nav>
         <div className="border-t p-3 text-xs text-muted-foreground">
           <div>env: dev</div>

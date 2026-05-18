@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -190,7 +191,12 @@ function OrdersTable({ rows, loading }: OrdersTableProps): React.ReactElement {
         {rows.map((row) => (
           <TableRow key={`${row.connectionId}:${row.shopifyOrderId}`}>
             <TableCell className="font-mono text-xs">
-              {row.shopifyOrderName ?? `#${row.shopifyOrderId}`}
+              <Link
+                to={`/orders/${row.shopifyOrderId}?connection=${encodeURIComponent(row.connectionId)}`}
+                className="hover:underline"
+              >
+                {row.shopifyOrderName ?? `#${row.shopifyOrderId}`}
+              </Link>
             </TableCell>
             <TableCell className={cn('text-muted-foreground', !row.customerEmail && 'italic')}>
               {row.customerEmail ?? 'guest'}

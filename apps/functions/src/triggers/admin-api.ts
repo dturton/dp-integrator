@@ -116,6 +116,200 @@ export async function handleAdminStatus(deps: AdminApiDeps): Promise<HttpRespons
   };
 }
 
+export async function handleAdminOrderDetail(
+  deps: AdminApiDeps,
+  query: URLSearchParams,
+): Promise<HttpResponseInit> {
+  const env = deps.environment;
+  const pool = deps.pgPool;
+
+  const connectionId = (query.get('connection') ?? '').trim();
+  const orderIdRaw = (query.get('orderId') ?? '').trim();
+  if (!connectionId || !orderIdRaw) {
+    return {
+      status: 400,
+      jsonBody: { ok: false, reason: 'bad_request', detail: 'connection + orderId required' },
+    };
+  }
+  // Accept either the bare numeric id or the full GID; normalize to GID.
+  const orderGid = /^gid:\/\/shopify\/Order\/\d+$/.test(orderIdRaw)
+    ? orderIdRaw
+    : /^\d+$/.test(orderIdRaw)
+      ? `gid://shopify/Order/${orderIdRaw}`
+      : undefined;
+  if (orderGid === undefined) {
+    return {
+      status: 400,
+      jsonBody: { ok: false, reason: 'bad_request', detail: 'orderId must be numeric or full GID' },
+    };
+  }
+
+  // Order header from order_sync_log.
+  const rowRes = await pool.query<RecentRowDb & {
+    shopify_created_at: string | null;
+    shopify_processed_at: string | null;
+    subtotal_price: string | null;
+    total_tax: string | null;
+    total_discounts: string | null;
+    total_shipping: string | null;
+    park_stage: string | null;
+    park_detail: string | null;
+    park_error_class: string | null;
+    ignored_reason: string | null;
+    ns_record_type: string | null;
+    ns_account_id: string | null;
+    ns_tran_id: string | null;
+  }>(
+    `SELECT shopify_order_id, shopify_order_name, connection_id, status,
+            customer_email, total_price::text AS total_price, currency_code,
+            subtotal_price::text AS subtotal_price, total_tax::text AS total_tax,
+            total_discounts::text AS total_discounts, total_shipping::text AS total_shipping,
+            shopify_created_at::text AS shopify_created_at,
+            shopify_processed_at::text AS shopify_processed_at,
+            ns_internal_id, ns_record_type, ns_account_id, ns_tran_id,
+            park_stage, park_detail, park_error_class, ignored_reason,
+            synced_at::text AS synced_at, updated_at::text AS updated_at
+       FROM order_sync_log
+      WHERE environment=$1 AND connection_id=$2 AND shopify_order_gid=$3
+      LIMIT 1`,
+    [env, connectionId, orderGid],
+  );
+  if (rowRes.rows.length === 0) {
+    return { status: 404, jsonBody: { ok: false, reason: 'not_found' } };
+  }
+  const head = rowRes.rows[0]!;
+
+  // Attempts timeline (newest first so the view defaults to "latest delivery").
+  const attemptsRes = await pool.query<{
+    delivery_count: number;
+    outcome: string;
+    stage: string | null;
+    error_class: string | null;
+    detail: string | null;
+    inbound_envelope_uri: string | null;
+    outbound_payload_uri: string | null;
+    payload_digest: Record<string, unknown> | null;
+    started_at: string;
+    finished_at: string;
+    duration_ms: number;
+  }>(
+    `SELECT delivery_count, outcome, stage, error_class, detail,
+            inbound_envelope_uri, outbound_payload_uri, payload_digest,
+            started_at::text AS started_at, finished_at::text AS finished_at, duration_ms
+       FROM order_attempt
+      WHERE environment=$1 AND connection_id=$2 AND shopify_order_gid=$3
+      ORDER BY started_at DESC
+      LIMIT 50`,
+    [env, connectionId, orderGid],
+  );
+
+  return {
+    status: 200,
+    jsonBody: {
+      order: {
+        shopifyOrderGid: orderGid,
+        shopifyOrderId: head.shopify_order_id,
+        shopifyOrderName: head.shopify_order_name,
+        connectionId: head.connection_id,
+        status: head.status,
+        customerEmail: head.customer_email,
+        currencyCode: head.currency_code,
+        totalPrice: head.total_price,
+        subtotalPrice: head.subtotal_price,
+        totalTax: head.total_tax,
+        totalDiscounts: head.total_discounts,
+        totalShipping: head.total_shipping,
+        shopifyCreatedAt: head.shopify_created_at,
+        shopifyProcessedAt: head.shopify_processed_at,
+        nsAccountId: head.ns_account_id,
+        nsRecordType: head.ns_record_type,
+        nsInternalId: head.ns_internal_id,
+        nsTranId: head.ns_tran_id,
+        parkStage: head.park_stage,
+        parkDetail: head.park_detail,
+        parkErrorClass: head.park_error_class,
+        ignoredReason: head.ignored_reason,
+        syncedAt: head.synced_at,
+        updatedAt: head.updated_at,
+      },
+      attempts: attemptsRes.rows.map((a) => ({
+        deliveryCount: a.delivery_count,
+        outcome: a.outcome,
+        stage: a.stage,
+        errorClass: a.error_class,
+        detail: a.detail,
+        inboundEnvelopeUri: a.inbound_envelope_uri,
+        outboundPayloadUri: a.outbound_payload_uri,
+        payloadDigest: a.payload_digest,
+        startedAt: a.started_at,
+        finishedAt: a.finished_at,
+        durationMs: a.duration_ms,
+      })),
+    },
+  };
+}
+
+export async function handleAdminReconciliation(
+  deps: AdminApiDeps,
+  query: URLSearchParams,
+): Promise<HttpResponseInit> {
+  const env = deps.environment;
+  const pool = deps.pgPool;
+
+  const limit = clampInt(query.get('limit'), 30, 1, 200);
+  const connectionId = query.get('connection') ?? undefined;
+  const driftOnly = query.get('drift') === 'true';
+
+  const clauses: string[] = ['environment = $1'];
+  const params: unknown[] = [env];
+  if (connectionId) {
+    params.push(connectionId);
+    clauses.push(`connection_id = $${params.length}`);
+  }
+  if (driftOnly) {
+    clauses.push(`discrepancy IS NOT NULL`);
+  }
+  params.push(limit);
+  const limitIdx = params.length;
+
+  const r = await pool.query<{
+    business_date: string;
+    connection_id: string;
+    shopify_order_count: number;
+    ns_txn_count: number;
+    shopify_total: string;
+    ns_total: string;
+    discrepancy: Record<string, unknown> | null;
+    created_at: string;
+  }>(
+    `SELECT business_date::text, connection_id,
+            shopify_order_count, ns_txn_count,
+            shopify_total::text, ns_total::text,
+            discrepancy, created_at::text
+       FROM reconciliation_snapshots
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY business_date DESC, connection_id
+      LIMIT $${limitIdx}`,
+    params,
+  );
+
+  return {
+    status: 200,
+    jsonBody: {
+      rows: r.rows.map((row) => ({
+        businessDate: row.business_date,
+        connectionId: row.connection_id,
+        shopifyOrderCount: Number(row.shopify_order_count),
+        nsTxnCount: Number(row.ns_txn_count),
+        shopifyTotal: row.shopify_total,
+        nsTotal: row.ns_total,
+        discrepancy: row.discrepancy,
+        createdAt: row.created_at,
+      })),
+    },
+  };
+}
+
 export async function handleAdminOrders(
   deps: AdminApiDeps,
   query: URLSearchParams,
@@ -255,6 +449,42 @@ export function registerAdminApi(getDeps: () => AdminApiDeps | undefined): void 
       }
       const url = new URL(request.url);
       return handleAdminOrders(deps, url.searchParams);
+    },
+  });
+
+  app.http('adminOrderDetail', {
+    methods: ['GET'],
+    authLevel: 'function',
+    route: 'admin/orders/detail',
+    handler: async (
+      request: HttpRequest,
+      context: InvocationContext,
+    ): Promise<HttpResponseInit> => {
+      const deps = getDeps();
+      if (!deps) {
+        context.log('adminOrderDetail not_ready');
+        return { status: 503, jsonBody: { ok: false, reason: 'not_ready' } };
+      }
+      const url = new URL(request.url);
+      return handleAdminOrderDetail(deps, url.searchParams);
+    },
+  });
+
+  app.http('adminReconciliation', {
+    methods: ['GET'],
+    authLevel: 'function',
+    route: 'admin/reconciliation',
+    handler: async (
+      request: HttpRequest,
+      context: InvocationContext,
+    ): Promise<HttpResponseInit> => {
+      const deps = getDeps();
+      if (!deps) {
+        context.log('adminReconciliation not_ready');
+        return { status: 503, jsonBody: { ok: false, reason: 'not_ready' } };
+      }
+      const url = new URL(request.url);
+      return handleAdminReconciliation(deps, url.searchParams);
     },
   });
 }

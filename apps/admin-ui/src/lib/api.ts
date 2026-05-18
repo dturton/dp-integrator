@@ -75,6 +75,91 @@ async function get<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+export interface OrderDetail {
+  readonly shopifyOrderGid: string;
+  readonly shopifyOrderId: string;
+  readonly shopifyOrderName: string | null;
+  readonly connectionId: string;
+  readonly status: 'imported' | 'parked' | 'ignored';
+  readonly customerEmail: string | null;
+  readonly currencyCode: string | null;
+  readonly totalPrice: string | null;
+  readonly subtotalPrice: string | null;
+  readonly totalTax: string | null;
+  readonly totalDiscounts: string | null;
+  readonly totalShipping: string | null;
+  readonly shopifyCreatedAt: string | null;
+  readonly shopifyProcessedAt: string | null;
+  readonly nsAccountId: string | null;
+  readonly nsRecordType: string | null;
+  readonly nsInternalId: string | null;
+  readonly nsTranId: string | null;
+  readonly parkStage: string | null;
+  readonly parkDetail: string | null;
+  readonly parkErrorClass: string | null;
+  readonly ignoredReason: string | null;
+  readonly syncedAt: string | null;
+  readonly updatedAt: string;
+}
+
+export interface OrderAttempt {
+  readonly deliveryCount: number;
+  readonly outcome: string;
+  readonly stage: string | null;
+  readonly errorClass: string | null;
+  readonly detail: string | null;
+  readonly inboundEnvelopeUri: string | null;
+  readonly outboundPayloadUri: string | null;
+  readonly payloadDigest: Record<string, unknown> | null;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly durationMs: number;
+}
+
+export interface OrderDetailResponse {
+  readonly order: OrderDetail;
+  readonly attempts: ReadonlyArray<OrderAttempt>;
+}
+
+export interface ReconciliationRow {
+  readonly businessDate: string;
+  readonly connectionId: string;
+  readonly shopifyOrderCount: number;
+  readonly nsTxnCount: number;
+  readonly shopifyTotal: string;
+  readonly nsTotal: string;
+  readonly discrepancy: Record<string, unknown> | null;
+  readonly createdAt: string;
+}
+
+export interface ReconciliationResponse {
+  readonly rows: ReadonlyArray<ReconciliationRow>;
+}
+
+export interface ReplayResponse {
+  readonly ok: boolean;
+  readonly outcome?: 'replayed' | 'refused_already_synced' | 'unknown_connection';
+  readonly previousStatus?: string;
+  readonly sessionId?: string;
+  readonly targetId?: string;
+  readonly detail?: string;
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body),
+  });
+  // For replay, 202 = success, 409 = refused_already_synced (still want body), 404 = unknown
+  const json = (await res.json().catch(() => ({}))) as T;
+  if (!res.ok && res.status !== 409 && res.status !== 404) {
+    throw new ApiError(res.status, JSON.stringify(json));
+  }
+  return json;
+}
+
 export const api = {
   status: (): Promise<AdminStatusResponse> => get('/api/admin/status'),
   orders: (q: OrdersQuery = {}): Promise<AdminOrdersResponse> => {
@@ -86,5 +171,20 @@ export const api = {
     if (q.search) params.set('search', q.search);
     const qs = params.toString();
     return get<AdminOrdersResponse>(`/api/admin/orders${qs ? `?${qs}` : ''}`);
+  },
+  orderDetail: (connectionId: string, orderId: string): Promise<OrderDetailResponse> => {
+    const params = new URLSearchParams({ connection: connectionId, orderId });
+    return get<OrderDetailResponse>(`/api/admin/orders/detail?${params.toString()}`);
+  },
+  reconciliation: (opts: { limit?: number; connection?: string; driftOnly?: boolean } = {}): Promise<ReconciliationResponse> => {
+    const params = new URLSearchParams();
+    if (opts.limit !== undefined) params.set('limit', String(opts.limit));
+    if (opts.connection) params.set('connection', opts.connection);
+    if (opts.driftOnly) params.set('drift', 'true');
+    const qs = params.toString();
+    return get<ReconciliationResponse>(`/api/admin/reconciliation${qs ? `?${qs}` : ''}`);
+  },
+  replay: (connectionId: string, orderGid: string, force = false): Promise<ReplayResponse> => {
+    return postJson<ReplayResponse>('/api/ops/replay', { connectionId, orderGid, force });
   },
 };

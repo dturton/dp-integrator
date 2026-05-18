@@ -149,7 +149,12 @@ export function Dashboard(): React.ReactElement {
                 {data?.mostRecent.map((row) => (
                   <TableRow key={`${row.connectionId}:${row.shopifyOrderId}`}>
                     <TableCell className="font-mono text-xs">
-                      {row.shopifyOrderName ?? `#${row.shopifyOrderId}`}
+                      <Link
+                        to={`/orders/${row.shopifyOrderId}?connection=${encodeURIComponent(row.connectionId)}`}
+                        className="hover:underline"
+                      >
+                        {row.shopifyOrderName ?? `#${row.shopifyOrderId}`}
+                      </Link>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {row.customerEmail ?? '—'}
