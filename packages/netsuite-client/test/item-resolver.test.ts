@@ -62,6 +62,23 @@ describe('resolveItemReferences', () => {
     }
   });
 
+  it('resolves all-digit SKUs through NS (does not treat numeric strings as internal ids)', async () => {
+    // Regression: Franklin Electric MPN-style SKUs like '92980015' are all
+    // digits but are NOT NS internal ids. The earlier `/^\d+$/` shortcut
+    // passed them through verbatim and NS rejected with INVALID_FIELD_VALUE.
+    const ns = new FakeNetSuiteGateway();
+    ns.seedItem(nsAccountId, '92980015', '54321');
+    const result = await resolveItemReferences(
+      payload([{ item: { id: '92980015' }, quantity: 1 }]),
+      ns,
+      nsAccountId,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.item.items[0]).toEqual({ item: { id: '54321' }, quantity: 1 });
+    }
+  });
+
   it('does NOT apply the item fallback to shipping lines (shipping keeps parking on miss)', async () => {
     const ns = new FakeNetSuiteGateway();
     ns.seedItem(nsAccountId, 'KNOWN', '11001');

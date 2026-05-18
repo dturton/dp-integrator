@@ -15,9 +15,11 @@ import type { NsOrderPayload } from './payload-builder.js';
  * resolver swaps each placeholder with the resolved internal id by
  * querying NS and caches the result for the gateway's process lifetime.
  *
- * Already-numeric ids pass through unchanged — connections that pre-map
- * SKU→id via the `lookup` primitive (or via a future `lookup_item` table)
- * still work without an extra round-trip.
+ * Every id is sent through `resolveItemId` regardless of shape — SKUs are
+ * frequently all-digit (e.g. Franklin Electric MPNs like `92980015`), so
+ * "numeric means internal id" would collide with real SKUs and ship the
+ * SKU to NS verbatim. The gateway's per-process cache keeps repeat
+ * lookups cheap.
  *
  * On miss: parks with `unmapped_construct` carrying the SKU and the
  * sublist (item vs shipping). The brief's "register the missing mapping,
@@ -85,11 +87,6 @@ async function resolveSublist(
       continue;
     }
     const idStr = String(rawId);
-    // Already a numeric NS internal id → nothing to resolve.
-    if (/^\d+$/.test(idStr)) {
-      resolved.push(line);
-      continue;
-    }
     const internalId = await ns.resolveItemId({ nsAccountId, sku: idStr });
     if (internalId === null) {
       if (fallbackInternalId !== undefined) {
