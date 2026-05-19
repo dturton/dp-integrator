@@ -18,7 +18,15 @@ export type EligibilityReason =
   | 'voided'
   | 'pending_payment'
   | 'no_line_items'
-  | 'disallowed_topic';
+  | 'disallowed_topic'
+  /**
+   * Webhook delivery of `orders/updated` for an order with no prior xref row.
+   * The integrator treats creation as an `orders/create` responsibility — an
+   * update event must not produce a new NS sales order. Stamped by the
+   * pre-claim gate in the order handler; catchup/replay re-publishes bypass
+   * the gate, so this reason is exclusive to live Shopify webhook deliveries.
+   */
+  | 'update_before_create';
 
 /**
  * Connection-scoped overrides. If unset, defaults to "sync only paid/authorized,

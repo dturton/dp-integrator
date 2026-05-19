@@ -160,7 +160,6 @@ export async function handleOrderMessage(
     return { kind: 'rejected', reason: 'unknown_connection', detail: `connectionId=${msg.connectionId}` };
   }
 
-  // 2. Idempotency claim
   const dedupKey: DedupKeyParts = {
     environment: msg.environment,
     connectionId: connection.connectionId,
@@ -168,6 +167,45 @@ export async function handleOrderMessage(
     sourceSystem: 'shopify',
     sourceId: msg.orderGid,
   };
+
+  // 1b. update_before_create gate. Live Shopify `orders/updated` deliveries
+  // for orders we've never recorded should NOT create the NS sales order —
+  // creation is the responsibility of `orders/create` (or an explicit
+  // catchup/replay re-publish). Without this gate, a Shopify edit on a
+  // previously-ignored or pre-integration order would create it in NS,
+  // which is rarely what an operator wants. Catchup/replay deliveries set
+  // `source` to their own value and bypass the gate.
+  //
+  // Legacy messages already on the bus have no `source` — treat them as
+  // `webhook` so the gate applies safely (catchup/replay producers stamp
+  // the field explicitly in this rev).
+  const source = msg.source ?? 'webhook';
+  if (source === 'webhook' && msg.topic === 'orders/updated') {
+    const existing = await deps.xrefStore.lookup(dedupKey);
+    if (!existing) {
+      await deps.xrefStore.markIgnored(dedupKey);
+      const o: OrderHandlerOutcome = {
+        kind: 'ignored_by_eligibility',
+        connectionId: connection.connectionId,
+        orderGid: msg.orderGid,
+        reason: 'update_before_create',
+      };
+      await writeSyncLog(deps, connection, msg, {
+        status: 'ignored',
+        ignoredReason: 'update_before_create',
+        attemptCtx,
+      });
+      deps.telemetry?.trackIgnored({
+        environment: msg.environment,
+        connectionId: connection.connectionId,
+        reason: 'update_before_create',
+      });
+      await recordAttempt(deps, attemptCtx, msg, connection, o, undefined, undefined, undefined, undefined, undefined, undefined);
+      return o;
+    }
+  }
+
+  // 2. Idempotency claim
   const claim = await deps.xrefStore.claim({
     ...dedupKey,
     targetSystem: 'netsuite',
@@ -863,6 +901,10 @@ function parseOrderWebhookMessage(raw: unknown): ParseSuccess | ParseFailure {
     if (typeof v !== 'string' || v.length === 0) {
       return { ok: false, error: `missing/empty string field '${key}'` };
     }
+  }
+  const src = m['source'];
+  if (src !== undefined && src !== 'webhook' && src !== 'catchup' && src !== 'replay') {
+    return { ok: false, error: `invalid source: ${String(src)}` };
   }
   return { ok: true, value: m as unknown as OrderWebhookMessage };
 }

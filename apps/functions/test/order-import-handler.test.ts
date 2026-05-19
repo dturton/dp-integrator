@@ -173,6 +173,70 @@ describe('handleOrderMessage — Slice D5 full pipeline', () => {
     expect(ns.attemptCount()).toBe(0);
   });
 
+  it('orders/updated webhook for an unknown order is ignored (update_before_create gate)', async () => {
+    // Pre-integration order or one that landed before we ever saw it. The
+    // gate must not let the update create a new NS sales order; that's
+    // `orders/create`'s job. `markIgnored` should land an xref row so the
+    // *next* update for the same order short-circuits via `already-ignored`.
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/99999' });
+    const { deps, ns, xrefStore } = buildDeps({ order });
+    const outcome = await handleOrderMessage(
+      deps,
+      makeMessage({
+        orderGid: 'gid://shopify/Order/99999',
+        topic: 'orders/updated',
+        source: 'webhook',
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: 'ignored_by_eligibility', reason: 'update_before_create' });
+    expect(ns.attemptCount()).toBe(0);
+    const xref = await xrefStore.lookup({
+      environment: 'dev',
+      connectionId: acme.connectionId,
+      entityType: 'order',
+      sourceSystem: 'shopify',
+      sourceId: 'gid://shopify/Order/99999',
+    });
+    expect(xref?.status).toBe('ignored');
+  });
+
+  it('orders/updated from catchup creates the NS record even when xref is absent', async () => {
+    // The catchup poller is the rescue path — it must not be subject to the
+    // webhook-only update_before_create gate.
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/55555' });
+    const { deps, ns } = buildDeps({ order });
+    const outcome = await handleOrderMessage(
+      deps,
+      makeMessage({
+        orderGid: 'gid://shopify/Order/55555',
+        topic: 'orders/updated',
+        source: 'catchup',
+      }),
+    );
+    expect(outcome.kind).toBe('imported');
+    expect(ns.getRecords(acme.nsAccountId, 'salesorder' as never).size).toBe(1);
+  });
+
+  it('orders/updated webhook for an already-synced order short-circuits (existing claim path)', async () => {
+    const order = makeFakeOrder({ id: 'gid://shopify/Order/77777' });
+    const { deps, ns } = buildDeps({ order });
+    // First delivery — establishes the synced xref.
+    await handleOrderMessage(deps, makeMessage({ orderGid: 'gid://shopify/Order/77777' }));
+    const initialAttempts = ns.attemptCount();
+    // Second delivery as `orders/updated` from Shopify. Existing xref means
+    // the gate is satisfied; the claim short-circuits via `already_synced`.
+    const outcome = await handleOrderMessage(
+      deps,
+      makeMessage({
+        orderGid: 'gid://shopify/Order/77777',
+        topic: 'orders/updated',
+        source: 'webhook',
+      }),
+    );
+    expect(outcome.kind).toBe('already_synced');
+    expect(ns.attemptCount()).toBe(initialAttempts); // no extra NS write
+  });
+
   it('parks when a required lookup misses (currency not in lookup_currency)', async () => {
     const order = makeFakeOrder({
       id: 'gid://shopify/Order/12345',

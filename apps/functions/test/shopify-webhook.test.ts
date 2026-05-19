@@ -163,6 +163,7 @@ describe('handleShopifyWebhook', () => {
       orderGid: 'gid://shopify/Order/100',
       envelopeBlobUri: outcome.envelopeUri,
       receivedAt: FIXED_NOW.toISOString(),
+      source: 'webhook',
     });
   });
 

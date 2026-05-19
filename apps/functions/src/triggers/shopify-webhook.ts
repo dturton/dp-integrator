@@ -153,6 +153,7 @@ export async function handleShopifyWebhook(
     orderGid,
     envelopeBlobUri: envelopeUri,
     receivedAt: receivedAt.toISOString(),
+    source: 'webhook',
   };
 
   try {

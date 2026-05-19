@@ -158,6 +158,10 @@ async function pollOneConnection(
         summary.id,
       )}/${now.toISOString()}`,
       receivedAt: now.toISOString(),
+      // Bypasses the handler's webhook-only `update_before_create` gate so a
+      // poller rescue can still create the NS sales order for an order we
+      // never saw via Shopify's live push.
+      source: 'catchup',
     };
     await deps.queue.enqueue({
       sessionId: `${connectionId}:${summary.id}`,

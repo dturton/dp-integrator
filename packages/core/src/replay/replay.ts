@@ -64,6 +64,8 @@ export interface OrderWebhookMessageBody {
   readonly orderGid: string;
   readonly envelopeBlobUri: string;
   readonly receivedAt: string;
+  /** Mirrors `apps/functions/src/messages.ts`. Replay always stamps 'replay'. */
+  readonly source?: 'webhook' | 'catchup' | 'replay';
 }
 
 export interface ReplayDeps {
@@ -137,6 +139,9 @@ export async function requestReplay(
     // / log readers can tell this delivery came from replay, not Shopify.
     envelopeBlobUri: `replay://dpi/${req.environment}/${req.connectionId}/${encodeURIComponent(req.orderGid)}/${now.toISOString()}`,
     receivedAt: now.toISOString(),
+    // Bypasses the handler's `update_before_create` gate — operator-initiated
+    // replays are explicit acts that should always proceed.
+    source: 'replay',
   };
   await deps.queue.enqueue({ sessionId, body });
 

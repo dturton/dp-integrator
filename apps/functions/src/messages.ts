@@ -24,6 +24,15 @@ export interface OrderWebhookMessage {
   readonly envelopeBlobUri: string;
   /** ISO-8601 timestamp the receiver recorded. */
   readonly receivedAt: string;
+  /**
+   * Origin of the delivery. `webhook` = live Shopify push; `catchup` = poller
+   * rescue; `replay` = operator-initiated re-publish. The handler uses this
+   * to gate `orders/updated`-for-unknown-order: only `webhook` deliveries are
+   * ignored, since catchup/replay are explicit acts that should create when
+   * needed. Optional for back-compat with in-flight legacy messages — the
+   * handler defaults missing values to `webhook`.
+   */
+  readonly source?: 'webhook' | 'catchup' | 'replay';
 }
 
 /**
