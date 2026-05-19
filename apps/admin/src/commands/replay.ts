@@ -115,6 +115,11 @@ export async function replayCommand(argv: readonly string[]): Promise<void> {
       orderGid: args.orderGid,
       envelopeBlobUri: `replay://dpi/${env}/${args.connectionId}/${encodeURIComponent(args.orderGid)}/${now.toISOString()}`,
       receivedAt: now.toISOString(),
+      // Bypass the handler's webhook-only `update_before_create` gate —
+      // operator-initiated replays are explicit acts that should proceed
+      // even when no prior xref existed (or after this command's DELETE
+      // above wiped one). Mirrors `requestReplay` in @dpi/core.
+      source: 'replay',
     };
     await queue.enqueue({ sessionId, body });
 
