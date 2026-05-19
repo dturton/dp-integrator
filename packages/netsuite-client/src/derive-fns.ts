@@ -83,12 +83,24 @@ export const extractShopifyOrderId: DeriveFn = (_args, source) => {
 
 /**
  * Translate Shopify shipping lines into NS shipping sublist objects.
+ *
+ * `connection.defaultShipItemId` is a NS internal id by contract. We emit
+ * it as `{ id, __resolved: true }` so the item-resolver pass passes it
+ * through without trying to look it up as an `itemid` SKU (which would
+ * miss and park — the value is rarely a real SKU). The resolver strips
+ * the marker before NS sees the payload. When the connection has no
+ * `defaultShipItemId`, we emit the `'SHIP-STANDARD'` sentinel as a plain
+ * string so it still flows through SKU lookup — either NS has an item
+ * with that itemid or the order parks.
  */
 export const shopifyShippingToLine: DeriveFn = (args, source) => {
   const order = source as ShopifyOrder;
   const fallback = (args['defaultShipItemId'] as string | undefined) ?? null;
+  const itemRef: unknown = fallback !== null
+    ? { id: fallback, __resolved: true }
+    : 'SHIP-STANDARD';
   return order.shippingLines.map((s) => ({
-    item: fallback ?? 'SHIP-STANDARD',
+    item: itemRef,
     rate: Number(s.price.amount),
     amount: Number(s.price.amount),
     description: s.title,

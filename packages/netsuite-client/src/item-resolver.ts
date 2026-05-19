@@ -21,6 +21,12 @@ import type { NsOrderPayload } from './payload-builder.js';
  * SKU to NS verbatim. The gateway's per-process cache keeps repeat
  * lookups cheap.
  *
+ * Exception: producers that have a NS internal id in hand (e.g. the
+ * shipping derive using `connection.defaultShipItemId`) emit a marker
+ * `{ id, __resolved: true }`. The resolver strips the marker and passes
+ * the line through unchanged. This avoids a doomed SuiteQL roundtrip on
+ * values that were never SKUs to begin with.
+ *
  * On miss: parks with `unmapped_construct` carrying the SKU and the
  * sublist (item vs shipping). The brief's "register the missing mapping,
  * don't guess" stance — operators see the missing SKU on `dpi parked` and
@@ -84,6 +90,13 @@ async function resolveSublist(
     const rawId = (itemRef as { id?: unknown }).id;
     if (rawId === undefined || rawId === null) {
       resolved.push(line);
+      continue;
+    }
+    // Pre-resolved marker — value is already a NS internal id (e.g. set by
+    // the shipping derive from `connection.defaultShipItemId`). Strip the
+    // marker; NS expects only `id` on the ref object.
+    if ((itemRef as { __resolved?: unknown }).__resolved === true) {
+      resolved.push({ ...line, item: { id: String(rawId) } });
       continue;
     }
     const idStr = String(rawId);

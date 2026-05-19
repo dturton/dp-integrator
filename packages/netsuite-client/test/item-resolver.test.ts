@@ -79,6 +79,29 @@ describe('resolveItemReferences', () => {
     }
   });
 
+  it('passes through pre-resolved __resolved refs without NS lookup (defaultShipItemId path)', async () => {
+    // Regression: `connection.defaultShipItemId` is a NS internal id, not a
+    // SKU. The shipping derive stamps `{ id, __resolved: true }` so the
+    // resolver should NOT call resolveItemId — it'd miss and park. The
+    // marker must also be stripped before NS sees the payload.
+    const ns = new FakeNetSuiteGateway();
+    ns.seedItem(nsAccountId, 'WIDGET-1', '11001');
+    const result = await resolveItemReferences(
+      payload(
+        [{ item: { id: 'WIDGET-1' }, quantity: 1 }],
+        [{ item: { id: '6516', __resolved: true }, rate: 10 }],
+      ),
+      ns,
+      nsAccountId,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.shipping?.items[0]).toEqual({ item: { id: '6516' }, rate: 10 });
+    }
+    // resolveItemId only ran for the line item (WIDGET-1), not the shipping ref.
+    expect(ns.resolveItemAttemptCount()).toBe(1);
+  });
+
   it('does NOT apply the item fallback to shipping lines (shipping keeps parking on miss)', async () => {
     const ns = new FakeNetSuiteGateway();
     ns.seedItem(nsAccountId, 'KNOWN', '11001');
