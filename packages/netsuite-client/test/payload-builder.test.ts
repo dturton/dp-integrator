@@ -176,6 +176,68 @@ describe('buildOrderPayload', () => {
     expect(r.payload).not.toHaveProperty('shipping');
   });
 
+  it('sets header shipMethod from lookup_ship_method keyed on first shipping-line title', async () => {
+    const order = makeFakeOrder({
+      shippingLines: [
+        {
+          id: 'gid://shopify/ShippingLine/1',
+          title: 'UPS 2nd Day Air',
+          price: { amount: '47.76', currencyCode: 'USD' },
+          taxLines: [],
+        },
+      ],
+    });
+    const lookups = new InMemoryLookupResolver({
+      lookup_currency: { USD: '1' },
+      lookup_payment_method: { shopify_payments: '12' },
+      lookup_ship_method: { 'UPS 2nd Day Air': '1234' },
+    });
+    const r = await buildOrderPayload({
+      connection: acme,
+      order,
+      customerInternalId: '4203',
+      lookups,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload['shipMethod']).toEqual({ id: '1234' });
+  });
+
+  it('leaves shipMethod null on a lookup miss (optional — NS falls back to customer default)', async () => {
+    const order = makeFakeOrder({
+      shippingLines: [
+        {
+          id: 'gid://shopify/ShippingLine/1',
+          title: 'Unknown Method',
+          price: { amount: '10.00', currencyCode: 'USD' },
+          taxLines: [],
+        },
+      ],
+    });
+    const r = await buildOrderPayload({
+      connection: acme,
+      order,
+      customerInternalId: '4203',
+      lookups: lookupsWithDefaults(), // no lookup_ship_method entries
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload['shipMethod']).toBeNull();
+  });
+
+  it('leaves shipMethod null when the order has no shipping lines', async () => {
+    const order = makeFakeOrder({ shippingLines: [] });
+    const r = await buildOrderPayload({
+      connection: acme,
+      order,
+      customerInternalId: '4203',
+      lookups: lookupsWithDefaults(),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload['shipMethod']).toBeNull();
+  });
+
   it('parks when the order has no line items', async () => {
     const order = makeFakeOrder({ lineItems: [] });
     const r = await buildOrderPayload({

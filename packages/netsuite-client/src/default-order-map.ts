@@ -44,6 +44,20 @@ export function buildDefaultOrderHeaderMap(connection: Connection): readonly Map
       to: 'paymentMethod',
       required: false,
     },
+    // Header `shipMethod` — the carrier dropdown on the NS Sales Order. NS
+    // falls back to the customer/subsidiary default when omitted, so an order
+    // shipped Shopify-side as "UPS 2nd Day Air" lands in NS as whatever the
+    // customer has set (usually Ground). Lookup the Shopify shipping-line
+    // title in `lookup_ship_method`; same `shipitem` internal id maps to both
+    // the header field and the shipping sublist line in NS.
+    // Optional so connections without lookup rows don't park orders.
+    {
+      kind: 'lookup',
+      table: 'lookup_ship_method',
+      fromKey: 'shippingLines.0.title',
+      to: 'shipMethod',
+      required: false,
+    },
     // Address sub-records (slice D9). The derives return either a NS-shaped
     // sub-record object or null; the payload builder passes objects through
     // unchanged (no ref-wrap) and skips fields whose value is null.
